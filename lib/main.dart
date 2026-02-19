@@ -1,23 +1,20 @@
 import 'package:flutter/material.dart';
-import 'screens/home_screen.dart'; // make sure this file exists
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'screens/home_screen.dart'; // start here
 
 void main() {
-  runApp(const AchievrApp());
+  runApp(const ProviderScope(child: MyApp()));
 }
 
-class AchievrApp extends StatelessWidget {
-  const AchievrApp({super.key});
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Achievr',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
-        useMaterial3: true,
-      ),
-      home: const HomeScreen(), // start screen of your app
+      title: 'Achievr App',
+      theme: ThemeData.dark(),
+      home: const HomeScreen(), // <-- first screen on launch
     );
   }
 }
