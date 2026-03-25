@@ -1,0 +1,142 @@
+-- ==========================
+-- 1️⃣ Profiles Table
+-- ==========================
+create table profiles (
+  id uuid primary key references auth.users(id) on delete cascade,
+  timezone text not null,
+  created_at timestamp with time zone default now()
+);
+
+-- ==========================
+-- 2️⃣ Goals Table
+-- ==========================
+create table goals (
+  goal_id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references profiles(id) on delete cascade,
+  title text not null,
+  description text,
+  category text, -- optional: Health, Career, etc.
+  created_at timestamp with time zone default now(),
+  active boolean default true
+);
+
+alter table goals enable row level security;
+create policy "Users can manage their goals"
+on goals
+for all
+using (auth.uid() = user_id);
+
+-- ==========================
+-- 3️⃣ Habits Table
+-- ==========================
+create type verification_type_enum as enum ('manual','photo','auto');
+
+create table habits (
+  habit_id uuid primary key default gen_random_uuid(),
+  goal_id uuid not null references goals(goal_id) on delete cascade,
+  title text not null,
+  verification_type verification_type_enum not null,
+  enforcement_level smallint not null,
+  created_at timestamp with time zone default now(),
+  active boolean default true
+);
+
+alter table habits enable row level security;
+create policy "Users can manage own habits"
+on habits
+for all
+using (exists (
+  select 1 from goals g
+  where g.goal_id = habits.goal_id
+    and g.user_id = auth.uid()
+));
+
+-- ==========================
+-- 4️⃣ Fixed Time Blocks Table
+-- ==========================
+create table fixed_time_blocks (
+  block_id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references profiles(id) on delete cascade,
+  day_of_week smallint not null check (day_of_week between 1 and 7),
+  start_time time not null,
+  end_time time not null check (end_time > start_time),
+  label text
+);
+
+alter table fixed_time_blocks enable row level security;
+create policy "Users manage own time blocks"
+on fixed_time_blocks
+for all
+using (auth.uid() = user_id);
+
+-- ==========================
+-- 5️⃣ Habit Schedules Table
+-- ==========================
+create table habit_schedules (
+  schedule_id uuid primary key default gen_random_uuid(),
+  habit_id uuid not null references habits(habit_id) on delete cascade,
+  day_of_week smallint not null check (day_of_week between 1 and 7),
+  start_time time not null,
+  end_time time not null check (end_time > start_time),
+  source text not null
+);
+
+alter table habit_schedules enable row level security;
+create policy "Users can manage own habit schedules"
+on habit_schedules
+for all
+using (exists (
+  select 1 from habits h
+  join goals g on h.goal_id = g.goal_id
+  where h.habit_id = habit_schedules.habit_id
+    and g.user_id = auth.uid()
+));
+
+-- ==========================
+-- 6️⃣ Habit Logs Table
+-- ==========================
+create type habit_status_enum as enum ('pending','done','missed');
+
+create table habit_logs (
+  log_id uuid primary key default gen_random_uuid(),
+  habit_id uuid not null references habits(habit_id) on delete cascade,
+  log_date date not null,
+  status habit_status_enum not null,
+  closed_at timestamp with time zone,
+  unique (habit_id, log_date)
+);
+
+alter table habit_logs enable row level security;
+create policy "Users can manage own habit logs"
+on habit_logs
+for all
+using (exists (
+  select 1 from habits h
+  join goals g on h.goal_id = g.goal_id
+  where h.habit_id = habit_logs.habit_id
+    and g.user_id = auth.uid()
+));
+
+-- ==========================
+-- 7️⃣ Verification Records Table
+-- ==========================
+create table verification_records (
+  verification_id uuid primary key default gen_random_uuid(),
+  log_id uuid not null references habit_logs(log_id) on delete cascade,
+  verification_type verification_type_enum not null,
+  evidence_uri text,
+  verified boolean not null,
+  verified_at timestamp with time zone
+);
+
+alter table verification_records enable row level security;
+create policy "Users can manage own verification records"
+on verification_records
+for all
+using (exists (
+  select 1 from habit_logs hl
+  join habits h on hl.habit_id = h.habit_id
+  join goals g on h.goal_id = g.goal_id
+  where hl.log_id = verification_records.log_id
+    and g.user_id = auth.uid()
+));

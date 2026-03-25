@@ -1,0 +1,697 @@
+Absolutely — here is a clean **full schema snapshot** of your current Achievr database state based on the SQL you pasted, written as a saveable engineering handoff.
+
+---
+
+# Achievr App — Database Schema Snapshot (March 2026)
+
+## Overview
+
+The Achievr backend is built around a **user → profile → goals → habits → schedules/logs** structure.
+
+The schema now supports:
+
+* authenticated users via Supabase Auth
+* profile persistence
+* enforced goals and habits
+* recurring weekly schedule templates
+* generated daily execution logs
+* blocked time storage
+* verification record storage
+* cascading cleanup when a user is deleted
+
+The current deletion model is designed so that deleting a user from `auth.users` removes the full related data tree.
+
+---
+
+# Core Relationship Model
+
+```text
+auth.users
+  ↓
+profiles
+  ↓
+goals
+  ↓
+habits
+  ↓
+habit_schedules
+  ↓
+habit_logs
+```
+
+Additional user-linked tables:
+
+```text
+profiles
+  ↓
+fixed_time_blocks
+
+profiles
+  ↓
+verification_records
+```
+
+Additional habit-linked tables:
+
+```text
+habits
+  ↓
+habit_schedules
+habits
+  ↓
+habit_logs
+habits
+  ↓
+verification_records
+```
+
+---
+
+# Table: `profiles`
+
+## Purpose
+
+Stores the persistent app-level identity and onboarding/account settings for each authenticated user.
+
+## SQL structure
+
+```text
+id uuid PK
+timezone text NOT NULL DEFAULT 'UTC'
+created_at timestamptz DEFAULT now()
+setup_completed boolean DEFAULT false
+username text
+updated_at timestamptz DEFAULT now()
+plan_tier text NOT NULL DEFAULT 'free'
+strict_mode_enabled boolean NOT NULL DEFAULT true
+wake_time time NOT NULL DEFAULT 06:00
+sleep_time time NOT NULL DEFAULT 22:00
+onboarding_step smallint NOT NULL DEFAULT 0
+```
+
+## Constraints
+
+* `profiles_pkey` → primary key on `id`
+* `profiles_id_fkey` → `id references auth.users(id) on delete cascade`
+* `profiles_onboarding_step_check` → onboarding step must be `0..5`
+* `profiles_plan_tier_check` → must be `free` or `pro`
+* `profiles_sleep_after_wake_check` → `sleep_time > wake_time`
+
+## Trigger
+
+* `set_profiles_updated_at`
+* fires `before update`
+* executes `set_updated_at()`
+
+## Meaning in product
+
+This is the user’s main Achievr identity record and the bridge between Supabase Auth and app data.
+
+---
+
+# Table: `goals`
+
+## Purpose
+
+Stores each user’s active enforced goals.
+
+## SQL structure
+
+```text
+goal_id uuid PK DEFAULT gen_random_uuid()
+user_id uuid NOT NULL
+title text NOT NULL
+description text
+category text
+created_at timestamptz DEFAULT now()
+active boolean DEFAULT true
+why text
+success_metric text
+```
+
+## Constraints
+
+* `goals_pkey` → primary key on `goal_id`
+* `goals_user_id_fkey` → `user_id references profiles(id) on delete cascade`
+
+## Meaning in product
+
+Each user currently has 2 active goals generated during onboarding.
+
+---
+
+# Table: `habits`
+
+## Purpose
+
+Stores the enforced habits attached to goals.
+
+## SQL structure
+
+```text
+habit_id uuid PK DEFAULT gen_random_uuid()
+goal_id uuid NOT NULL
+title text NOT NULL
+verification_type verification_type_enum NOT NULL
+enforcement_level smallint NOT NULL
+created_at timestamptz DEFAULT now()
+active boolean DEFAULT true
+description text
+target_frequency text
+duration_minutes integer
+```
+
+## Constraints
+
+* `habits_pkey` → primary key on `habit_id`
+* `habits_goal_id_fkey` → `goal_id references goals(goal_id) on delete cascade`
+
+## Meaning in product
+
+Each goal currently generates 3 habits.
+
+Verification is structured for future extensibility, even though the current app mainly uses `manual`.
+
+---
+
+# Table: `habit_schedules`
+
+## Purpose
+
+Stores recurring weekly schedule templates for each habit.
+
+This is the **template layer**, not the actual execution record layer.
+
+## SQL structure
+
+```text
+schedule_id uuid PK DEFAULT gen_random_uuid()
+habit_id uuid NOT NULL
+day_of_week smallint NOT NULL
+start_time time NOT NULL
+end_time time NOT NULL
+source text NOT NULL DEFAULT 'onboarding'
+```
+
+## Constraints
+
+* `habit_schedules_pkey` → primary key on `schedule_id`
+* `habit_schedules_habit_id_fkey` → `habit_id references habits(habit_id) on delete cascade`
+* `habit_schedules_unique_slot` → unique on `(habit_id, day_of_week, start_time, end_time)`
+* `habit_schedules_check` → `end_time > start_time`
+* `habit_schedules_day_of_week_check` → day must be `1..7`
+
+## Meaning in product
+
+These rows are created from onboarding scheduling logic and used to generate daily logs.
+
+---
+
+# Table: `habit_logs`
+
+## Purpose
+
+Stores real daily execution rows for habits.
+
+This is the actual accountability/execution layer used by Today and Progress.
+
+## SQL structure
+
+```text
+log_id uuid PK DEFAULT gen_random_uuid()
+habit_id uuid NOT NULL
+log_date date NOT NULL
+status habit_status_enum NOT NULL
+closed_at timestamptz
+user_id uuid NOT NULL
+schedule_id uuid
+scheduled_start time
+scheduled_end time
+verification_type text
+```
+
+## Constraints
+
+* `habit_logs_pkey` → primary key on `log_id`
+* `habit_logs_habit_id_log_date_key` → unique on `(habit_id, log_date)`
+* `habit_logs_habit_id_fkey` → `habit_id references habits(habit_id) on delete cascade`
+* `habit_logs_schedule_id_fkey` → `schedule_id references habit_schedules(schedule_id) on delete set null`
+* `habit_logs_user_id_fkey` → `user_id references auth.users(id) on delete cascade`
+
+## Meaning in product
+
+Each row represents one actual daily habit occurrence.
+
+Used for:
+
+* Today screen execution
+* Progress screen metrics
+* future missed/failed accountability logic
+
+## Notes
+
+This table currently has two delete paths:
+
+* direct through `user_id -> auth.users`
+* indirect through `habit_id -> habits`
+
+That is redundant, but not invalid.
+
+---
+
+# Table: `fixed_time_blocks`
+
+## Purpose
+
+Stores user unavailable time blocks used during onboarding schedule generation.
+
+## SQL structure
+
+```text
+block_id uuid PK DEFAULT gen_random_uuid()
+user_id uuid NOT NULL
+day_of_week smallint NOT NULL
+start_time time NOT NULL
+end_time time NOT NULL
+label text
+```
+
+## Constraints
+
+* `fixed_time_blocks_pkey` → primary key on `block_id`
+* `fixed_time_blocks_user_id_fkey` → `user_id references profiles(id) on delete cascade`
+* `fixed_time_blocks_check` → `end_time > start_time`
+* `fixed_time_blocks_day_of_week_check` → day must be `1..7`
+
+## Meaning in product
+
+This is the blocked-time system used to avoid scheduling habits in unavailable periods.
+
+Deleting the user deletes these rows too.
+
+---
+
+# Table: `verification_records`
+
+## Purpose
+
+Stores verification artifacts / proof records tied to a habit and user.
+
+Currently this appears to be forward-looking infrastructure for expanded verification methods.
+
+## SQL structure
+
+```text
+record_id uuid PK DEFAULT gen_random_uuid()
+habit_id uuid NOT NULL
+user_id uuid NOT NULL
+type verification_type_enum NOT NULL
+photo_url text
+created_at timestamptz DEFAULT now()
+```
+
+## Constraints
+
+* `verification_records_pkey` → primary key on `record_id`
+* `verification_records_habit_id_fkey` → `habit_id references habits(habit_id) on delete cascade`
+* `verification_records_user_id_fkey` → `user_id references profiles(id) on delete cascade`
+
+## Meaning in product
+
+Supports future verification expansion such as photo/location/proof workflows.
+
+---
+
+# Enum Usage
+
+## `habit_status_enum`
+
+Used by `habit_logs.status`
+
+Known statuses from app logic / design:
+
+```text
+pending
+done
+failed
+missed
+```
+
+## `verification_type_enum`
+
+Used by:
+
+* `habits.verification_type`
+* `verification_records.type`
+
+Current active implementation:
+
+```text
+manual
+```
+
+Planned later:
+
+```text
+location
+third_party
+photo/proof variants
+```
+
+---
+
+# Current Cascade Delete Behavior
+
+## Root delete
+
+When a row is deleted from:
+
+```text
+auth.users
+```
+
+this cascades to:
+
+```text
+profiles
+habit_logs
+```
+
+because:
+
+* `profiles.id -> auth.users(id) on delete cascade`
+* `habit_logs.user_id -> auth.users(id) on delete cascade`
+
+Then `profiles` cascades into:
+
+```text
+goals
+fixed_time_blocks
+verification_records
+```
+
+Then `goals` cascades into:
+
+```text
+habits
+```
+
+Then `habits` cascades into:
+
+```text
+habit_schedules
+habit_logs
+verification_records
+```
+
+## Practical result
+
+Deleting a Supabase auth user should remove all of that user’s related Achievr data:
+
+* profile
+* goals
+* habits
+* habit schedules
+* habit logs
+* fixed time blocks
+* verification records
+
+So this is now valid for onboarding reset testing.
+
+---
+
+# Backend Logic Supported by This Schema
+
+## 1. Onboarding profile initialization
+
+The schema supports default profile creation on signup with:
+
+* `plan_tier`
+* `strict_mode_enabled`
+* `setup_completed`
+* `onboarding_step`
+* `wake_time`
+* `sleep_time`
+
+## 2. Goal creation and goal clarification
+
+The schema supports:
+
+* title
+* description
+* category
+* why
+* success_metric
+* active flag
+
+## 3. Habit generation
+
+Each goal can have multiple enforced habits with:
+
+* verification type
+* enforcement level
+* optional description/frequency/duration
+
+## 4. Recurring schedule generation
+
+`habit_schedules` supports weekly recurring schedule templates.
+
+## 5. Daily execution generation
+
+`habit_logs` supports the generated daily occurrence model.
+
+## 6. Manual completion enforcement
+
+`habit_logs` contains the fields needed for current time-window validation:
+
+* `scheduled_start`
+* `scheduled_end`
+* `verification_type`
+* `status`
+* `closed_at`
+
+## 7. Future verification expansion
+
+`verification_records` provides a place for proof artifacts later.
+
+---
+
+# Current Schema Strengths
+
+## Good separation of template vs execution
+
+You now correctly separate:
+
+* recurring structure → `habit_schedules`
+* actual day-level execution → `habit_logs`
+
+That is a strong design decision.
+
+## Good delete chain
+
+Your cascading structure is mostly clean and supports test resets.
+
+## Good onboarding alignment
+
+The schema matches your actual onboarding flow and tab structure.
+
+## Extensible verification model
+
+The verification system is clearly designed for future growth.
+
+---
+
+# Current Schema Notes / Engineering Observations
+
+## 1. `habit_logs.user_id` is somewhat redundant
+
+Because `habit_logs` already references `habits`, and habits reference goals, and goals tie back to user/profile, the direct `user_id -> auth.users` link is not strictly necessary for relational cleanup.
+
+It may still be useful for:
+
+* simpler queries
+* faster filtering by user
+* easier security rules
+
+So it is acceptable.
+
+## 2. `verification_records.user_id` points to `profiles(id)`
+
+That is consistent with your profile-centered app data structure.
+
+## 3. `fixed_time_blocks.user_id` and `goals.user_id` point to `profiles(id)`
+
+That is also consistent and clean.
+
+## 4. `habit_logs.schedule_id` uses `on delete set null`
+
+This is a reasonable choice because a historical log can conceptually survive even if the template schedule row changes.
+In full user deletion, the logs are still removed through other cascade paths.
+
+---
+
+# Full Current Table Summary
+
+## `profiles`
+
+User account/app settings and onboarding state.
+
+## `goals`
+
+User goals.
+
+## `habits`
+
+Enforced habits under goals.
+
+## `habit_schedules`
+
+Recurring weekly schedule templates.
+
+## `habit_logs`
+
+Generated daily execution records.
+
+## `fixed_time_blocks`
+
+Blocked-time inputs for schedule generation.
+
+## `verification_records`
+
+Proof/verification infrastructure.
+
+---
+
+# Recommended Next Schema-Level Priorities
+
+## 1. Add indexes for common query paths
+
+Likely useful indexes:
+
+* `goals(user_id)`
+* `fixed_time_blocks(user_id, day_of_week)`
+* `habit_logs(user_id, log_date)`
+* `habit_logs(habit_id, log_date)`
+* `habit_schedules(habit_id, day_of_week)`
+* `habits(goal_id)`
+
+## 2. Tighten verification type consistency in `habit_logs`
+
+Right now `habit_logs.verification_type` is plain `text`, while `habits.verification_type` is `verification_type_enum`.
+
+For stricter consistency later, you may want `habit_logs.verification_type` to also use the enum.
+
+## 3. Add explicit timestamps where needed
+
+Possible future additions:
+
+* `updated_at` on goals/habits
+* `completed_at` separate from `closed_at`
+* `missed_at`
+* `generated_at` on logs
+
+## 4. Add stronger accountability fields later
+
+Potential future fields in `habit_logs`:
+
+* `failure_reason`
+* `missed_reason`
+* `verified_at`
+* `verification_record_id`
+
+---
+
+# Saveable One-Block Summary
+
+```text
+Achievr database now uses a cascade-safe user→profile→goals→habits→schedules/logs schema.
+
+Tables:
+- profiles
+- goals
+- habits
+- habit_schedules
+- habit_logs
+- fixed_time_blocks
+- verification_records
+
+Key structure:
+auth.users → profiles → goals → habits → habit_schedules / habit_logs
+profiles → fixed_time_blocks
+profiles → verification_records
+habits → verification_records
+
+Important constraints:
+- profiles.id references auth.users(id) on delete cascade
+- goals.user_id references profiles(id) on delete cascade
+- habits.goal_id references goals(goal_id) on delete cascade
+- habit_schedules.habit_id references habits(habit_id) on delete cascade
+- habit_logs.habit_id references habits(habit_id) on delete cascade
+- habit_logs.user_id references auth.users(id) on delete cascade
+- fixed_time_blocks.user_id references profiles(id) on delete cascade
+- verification_records.user_id references profiles(id) on delete cascade
+
+Current behavior:
+- deleting an auth user should remove all related Achievr data
+- habit_schedules are the recurring template layer
+- habit_logs are the actual daily execution layer
+- manual verification currently uses scheduled_start/scheduled_end window logic
+```
+
+update
+Current database snapshot after these fixes
+
+This is the coherent shape of your database.
+
+Identity / account
+profiles
+app user identity
+ties to auth.users
+stores username, plan, strict mode, wake/sleep, timezone, onboarding state
+Goal system
+goals
+one user has many goals
+habits
+one goal has many habits
+verification_type is the master verification config
+habit_schedules
+one habit has many scheduled windows across days/times
+fixed_time_blocks
+user-level unavailable time blocks
+Execution system
+habit_logs
+generated execution instances
+should snapshot verification method for active logs
+status enum includes:
+pending
+awaiting_verification
+done
+failed
+missed
+verification_records
+proof/evidence attached to a specific log and habit
+future-ready for photo/location/proof uploads
+log_verification_requests
+partner-verification requests for a specific log
+requester submits, verifier approves/rejects
+Social system
+friendships
+pending / accepted / declined / blocked
+should be unique as an unordered pair
+shared_progress_permissions
+owner decides what a friend can see
+habit_verifiers
+assigns one verifier to one habit
+Relationship summary
+profiles
+ ├─ goals
+ │   └─ habits
+ │      ├─ habit_schedules
+ │      ├─ habit_verifiers
+ │      ├─ habit_logs
+ │      │   ├─ verification_records
+ │      │   └─ log_verification_requests
+ │      └─ verification_records
+ ├─ fixed_time_blocks
+ ├─ friendships
+ └─ shared_progress_permissions
