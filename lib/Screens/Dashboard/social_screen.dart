@@ -28,11 +28,9 @@ class _SocialScreenState extends State<SocialScreen> {
 
   Map<String, dynamic>? _profile;
   Map<String, dynamic>? _disciplineStats;
-  List<Map<String, dynamic>> _recentBadges = [];
 
-  int _allTimeDone = 0;
-  int _activeGoals = 0;
-  int _activeHabits = 0;
+  int _friendCount = 0;
+  int _incomingRequestCount = 0;
 
   @override
   void initState() {
@@ -66,8 +64,6 @@ class _SocialScreenState extends State<SocialScreen> {
             public_handle,
             plan_tier,
             strict_mode_enabled,
-            wake_time,
-            sleep_time,
             current_title,
             prestige_level,
             accountability_score_visible
@@ -80,84 +76,42 @@ class _SocialScreenState extends State<SocialScreen> {
           .select('''
             user_id,
             execution_points,
-            current_streak,
-            best_streak,
-            total_completed,
-            total_failed,
-            total_missed,
-            clean_sessions
+            current_streak
           ''')
           .eq('user_id', user.id)
           .maybeSingle();
 
-      final goalsFuture = supabase
-          .from('goals')
-          .select('goal_id')
-          .eq('user_id', user.id)
-          .eq('active', true);
+      final friendshipsFuture = supabase
+          .from('friendships')
+          .select('friendship_id')
+          .eq('status', 'accepted')
+          .or('requester_id.eq.${user.id},addressee_id.eq.${user.id}');
 
-      final allDoneFuture = supabase
-          .from('habit_logs')
-          .select('log_id')
-          .eq('user_id', user.id)
-          .eq('status', 'done');
-
-      final badgesFuture = supabase
-          .from('user_badges')
-          .select('''
-            user_badge_id,
-            awarded_at,
-            badge_definitions (
-              badge_id,
-              code,
-              title,
-              description,
-              icon,
-              rarity,
-              category
-            )
-          ''')
-          .eq('user_id', user.id)
-          .order('awarded_at', ascending: false)
-          .limit(6);
+      final requestsFuture = supabase
+          .from('friendships')
+          .select('friendship_id')
+          .eq('addressee_id', user.id)
+          .eq('status', 'pending');
 
       final results = await Future.wait<dynamic>([
         profileFuture,
         statsFuture,
-        goalsFuture,
-        allDoneFuture,
-        badgesFuture,
+        friendshipsFuture,
+        requestsFuture,
       ]);
 
       final profileResponse = results[0] as Map<String, dynamic>?;
       final statsResponse = results[1] as Map<String, dynamic>?;
-      final goals = List<Map<String, dynamic>>.from(results[2] as List);
-      final allDone = List<Map<String, dynamic>>.from(results[3] as List);
-      final recentBadges = List<Map<String, dynamic>>.from(results[4] as List);
-
-      int activeHabits = 0;
-
-      if (goals.isNotEmpty) {
-        final goalIds = goals.map((goal) => goal['goal_id'].toString()).toList();
-
-        final habitsResponse = await supabase
-            .from('habits')
-            .select('habit_id')
-            .inFilter('goal_id', goalIds)
-            .eq('active', true);
-
-        activeHabits = List<Map<String, dynamic>>.from(habitsResponse).length;
-      }
+      final friendships = List<Map<String, dynamic>>.from(results[2] as List);
+      final requests = List<Map<String, dynamic>>.from(results[3] as List);
 
       if (!mounted) return;
 
       setState(() {
         _profile = profileResponse;
         _disciplineStats = statsResponse;
-        _recentBadges = recentBadges;
-        _activeGoals = goals.length;
-        _activeHabits = activeHabits;
-        _allTimeDone = allDone.length;
+        _friendCount = friendships.length;
+        _incomingRequestCount = requests.length;
         _isLoading = false;
       });
     } catch (e, st) {
@@ -167,7 +121,7 @@ class _SocialScreenState extends State<SocialScreen> {
       if (!mounted) return;
 
       setState(() {
-        _error = 'Failed to load social data.\n$e';
+        _error = 'Failed to load social page.\n$e';
         _isLoading = false;
       });
     }
@@ -246,197 +200,14 @@ class _SocialScreenState extends State<SocialScreen> {
     ).then((_) => _loadSocialData());
   }
 
-  void _showProfileSheet() {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: const Color(0xFF17171A),
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+  void _showComingSoonSetting(String title) {
+    Navigator.pop(context);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('$title settings can be connected next.'),
+        behavior: SnackBarBehavior.floating,
       ),
-      builder: (_) {
-        return SafeArea(
-          top: false,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 14, 20, 24),
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 42,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF3A3A42),
-                      borderRadius: BorderRadius.circular(99),
-                    ),
-                  ),
-                  const SizedBox(height: 18),
-                  Container(
-                    width: 72,
-                    height: 72,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF101013),
-                      shape: BoxShape.circle,
-                      border: Border.all(color: const Color(0xFF232329)),
-                    ),
-                    child: Center(
-                      child: Text(
-                        _username.isNotEmpty ? _username[0].toUpperCase() : 'U',
-                        style: const TextStyle(
-                          color: Color(0xFFF5F5F5),
-                          fontSize: 26,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  Text(
-                    _username,
-                    style: const TextStyle(
-                      color: Color(0xFFF5F5F5),
-                      fontSize: 22,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    _publicHandle.isNotEmpty ? '@$_publicHandle' : _currentTitle,
-                    style: const TextStyle(
-                      color: Color(0xFF9A9AA3),
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    alignment: WrapAlignment.center,
-                    children: [
-                      _buildMiniPill(label: _currentTitle, filled: true),
-                      _buildMiniPill(label: 'Lv $_prestigeLevel'),
-                      _buildMiniPill(label: '$_executionPoints XP'),
-                      _buildMiniPill(label: 'Streak $_currentStreak'),
-                    ],
-                  ),
-                  const SizedBox(height: 20),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _buildMetricChip(
-                          label: 'Points',
-                          value: _executionPoints.toString(),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: _buildMetricChip(
-                          label: 'Current Streak',
-                          value: _currentStreak.toString(),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _buildMetricChip(
-                          label: 'Best Streak',
-                          value: _bestStreak.toString(),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: _buildMetricChip(
-                          label: 'Clean Sessions',
-                          value: _cleanSessions.toString(),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 18),
-                  _buildInfoRow('Plan', _planTier.toUpperCase()),
-                  _buildInfoRow('Strict mode', _strictMode ? 'Enabled' : 'Disabled'),
-                  _buildInfoRow('Wake time', _formatTimeDisplay(_wakeTime)),
-                  _buildInfoRow('Sleep time', _formatTimeDisplay(_sleepTime)),
-                  _buildInfoRow('Active goals', '$_activeGoals'),
-                  _buildInfoRow('Active habits', '$_activeHabits'),
-                  _buildInfoRow('All-time done', '$_allTimeDone'),
-                  _buildInfoRow('Total failed', _totalFailed.toString()),
-                  _buildInfoRow('Total missed', _totalMissed.toString()),
-                  const SizedBox(height: 18),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: _buildSectionTitle(
-                      'Recent badges',
-                      subtitle: 'Your most recently unlocked identity markers.',
-                    ),
-                  ),
-                  if (_recentBadges.isEmpty)
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF101013),
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: const Color(0xFF232329)),
-                      ),
-                      child: const Text(
-                        'No badges unlocked yet.',
-                        style: TextStyle(color: Color(0xFF9A9AA3)),
-                      ),
-                    )
-                  else
-                    Wrap(
-                      spacing: 10,
-                      runSpacing: 10,
-                      children: _recentBadges.map(_buildBadgeTile).toList(),
-                    ),
-                  const SizedBox(height: 18),
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton(
-                      onPressed: _openOwnProfile,
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: const Color(0xFFF5F5F5),
-                        side: const BorderSide(color: Color(0xFF3A3A42)),
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                      ),
-                      child: const Text('Open Full Profile'),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton.icon(
-                      onPressed: _isSigningOut ? null : _signOut,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFFF5F5F5),
-                        foregroundColor: Colors.black,
-                        disabledBackgroundColor: const Color(0xFF2A2A2F),
-                        disabledForegroundColor: const Color(0xFF6F6F76),
-                        padding: const EdgeInsets.symmetric(vertical: 15),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        elevation: 0,
-                      ),
-                      icon: const Icon(Icons.logout),
-                      label: Text(
-                        _isSigningOut ? 'Signing Out...' : 'Sign Out',
-                        style: const TextStyle(fontWeight: FontWeight.w700),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
     );
   }
 
@@ -455,26 +226,6 @@ class _SocialScreenState extends State<SocialScreen> {
     }
     return '';
   }
-
-  String get _planTier {
-    final tier = _profile?['plan_tier'];
-    if (tier is String && tier.trim().isNotEmpty) {
-      return tier.trim();
-    }
-    return 'free';
-  }
-
-  String get _wakeTime {
-    final wake = _profile?['wake_time'];
-    return wake?.toString() ?? '--:--';
-  }
-
-  String get _sleepTime {
-    final sleep = _profile?['sleep_time'];
-    return sleep?.toString() ?? '--:--';
-  }
-
-  bool get _strictMode => _profile?['strict_mode_enabled'] == true;
 
   String get _currentTitle {
     final title = _profile?['current_title'];
@@ -505,242 +256,58 @@ class _SocialScreenState extends State<SocialScreen> {
     return int.tryParse('${value ?? ''}') ?? 0;
   }
 
-  int get _bestStreak {
-    final value = _disciplineStats?['best_streak'];
-    if (value is int) return value;
-    if (value is double) return value.round();
-    return int.tryParse('${value ?? ''}') ?? 0;
+  bool get _profileIsPublic {
+    return _profile?['accountability_score_visible'] == true;
   }
 
-  int get _cleanSessions {
-    final value = _disciplineStats?['clean_sessions'];
-    if (value is int) return value;
-    if (value is double) return value.round();
-    return int.tryParse('${value ?? ''}') ?? 0;
-  }
-
-  int get _totalFailed {
-    final value = _disciplineStats?['total_failed'];
-    if (value is int) return value;
-    if (value is double) return value.round();
-    return int.tryParse('${value ?? ''}') ?? 0;
-  }
-
-  int get _totalMissed {
-    final value = _disciplineStats?['total_missed'];
-    if (value is int) return value;
-    if (value is double) return value.round();
-    return int.tryParse('${value ?? ''}') ?? 0;
-  }
-
-  String _formatTimeDisplay(String raw) {
-    if (raw == '--:--') return raw;
-
-    final parts = raw.split(':');
-    if (parts.length < 2) return raw;
-
-    final hour = int.tryParse(parts[0]) ?? 0;
-    final minute = int.tryParse(parts[1]) ?? 0;
-
-    final suffix = hour >= 12 ? 'PM' : 'AM';
-    final displayHour = hour == 0 ? 12 : hour > 12 ? hour - 12 : hour;
-    final minuteText = minute.toString().padLeft(2, '0');
-
-    return '$displayHour:$minuteText $suffix';
-  }
-
-  Widget _buildSectionTitle(String title, {String? subtitle}) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10, top: 4),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            style: const TextStyle(
-              color: Color(0xFFF5F5F5),
-              fontSize: 18,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          if (subtitle != null) ...[
-            const SizedBox(height: 3),
-            Text(
-              subtitle,
-              style: const TextStyle(
-                color: Color(0xFF9A9AA3),
-                fontSize: 13,
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildMetricChip({
-    required String label,
-    required String value,
+  Widget _card({
+    required Widget child,
+    EdgeInsetsGeometry padding = const EdgeInsets.all(18),
+    EdgeInsetsGeometry? margin,
   }) {
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 14),
+      margin: margin,
+      padding: padding,
       decoration: BoxDecoration(
-        color: const Color(0xFF101013),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFF232329)),
-      ),
-      child: Column(
-        children: [
-          Text(
-            value,
-            style: const TextStyle(
-              color: Color(0xFFF5F5F5),
-              fontSize: 20,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            label,
-            style: const TextStyle(
-              color: Color(0xFF9A9AA3),
-              fontSize: 12,
-            ),
+        color: const Color(0xFF151519),
+        borderRadius: BorderRadius.circular(28),
+        border: Border.all(color: const Color(0xFF292930)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.24),
+            blurRadius: 28,
+            offset: const Offset(0, 16),
           ),
         ],
       ),
-    );
-  }
-
-  Widget _buildMiniPill({
-    required String label,
-    bool filled = false,
-  }) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: filled ? const Color(0xFFF5F5F5) : const Color(0xFF101013),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(
-          color: filled ? const Color(0xFFF5F5F5) : const Color(0xFF232329),
-        ),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-          color: filled ? Colors.black : const Color(0xFFF5F5F5),
-          fontSize: 12,
-          fontWeight: FontWeight.w700,
-        ),
-      ),
+      child: child,
     );
   }
 
   Widget _buildTopBar() {
     return Row(
       children: [
-        _buildIconShell(
+        _iconButton(
           icon: Icons.menu_rounded,
           onTap: () => _scaffoldKey.currentState?.openDrawer(),
         ),
         const Spacer(),
-        Column(
-          children: const [
-            Text(
-              'Social',
-              style: TextStyle(
-                color: Color(0xFFF5F5F5),
-                fontSize: 20,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-            SizedBox(height: 3),
-            Text(
-              'Friends + accountability',
-              style: TextStyle(
-                color: Color(0xFF9A9AA3),
-                fontSize: 12,
-              ),
-            ),
-          ],
+        const Text(
+          'Social',
+          style: TextStyle(
+            color: Color(0xFFF8F8F8),
+            fontSize: 22,
+            fontWeight: FontWeight.w900,
+            letterSpacing: -0.4,
+          ),
         ),
         const Spacer(),
-        const _ProfileAvatarSpacer(),
+        _profileAvatar(size: 44),
       ],
     );
   }
 
-  Widget _buildProfileAvatarButton() {
-    return GestureDetector(
-      onTap: _showProfileSheet,
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-            decoration: BoxDecoration(
-              color: const Color(0xFF17171A),
-              borderRadius: BorderRadius.circular(999),
-              border: Border.all(color: const Color(0xFF232329)),
-            ),
-            child: Row(
-              children: [
-                Text(
-                  'Lv $_prestigeLevel',
-                  style: const TextStyle(
-                    color: Color(0xFF9A9AA3),
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                const Text(
-                  '•',
-                  style: TextStyle(
-                    color: Color(0xFF4FC3F7),
-                    fontSize: 11,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                AnimatedPointsText(
-                  value: _executionPoints,
-                  style: const TextStyle(
-                    color: Color(0xFFF5F5F5),
-                    fontSize: 12,
-                    fontWeight: FontWeight.w800,
-                  ),
-                  suffix: ' XP',
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: const Color(0xFF17171A),
-              shape: BoxShape.circle,
-              border: Border.all(color: const Color(0xFF232329)),
-            ),
-            child: Center(
-              child: Text(
-                _username.isNotEmpty ? _username[0].toUpperCase() : 'U',
-                style: const TextStyle(
-                  color: Color(0xFFF5F5F5),
-                  fontSize: 16,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildIconShell({
+  Widget _iconButton({
     required IconData icon,
     required VoidCallback onTap,
   }) {
@@ -750,119 +317,240 @@ class _SocialScreenState extends State<SocialScreen> {
         width: 44,
         height: 44,
         decoration: BoxDecoration(
-          color: const Color(0xFF17171A),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: const Color(0xFF232329)),
+          color: const Color(0xFF151519),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: const Color(0xFF292930)),
         ),
         child: Icon(
           icon,
-          color: const Color(0xFFF5F5F5),
-          size: 20,
+          color: const Color(0xFFF8F8F8),
+          size: 21,
         ),
       ),
     );
   }
 
-  Widget _buildHeroCard() {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: const Color(0xFF17171A),
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: const Color(0xFF232329)),
+  Widget _profileAvatar({double size = 72}) {
+    return GestureDetector(
+      onTap: _openOwnProfile,
+      child: Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: const LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              Color(0xFF2A2A31),
+              Color(0xFF101013),
+            ],
+          ),
+          border: Border.all(color: const Color(0xFF34343C)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.28),
+              blurRadius: 24,
+              offset: const Offset(0, 12),
+            ),
+          ],
+        ),
+        child: Center(
+          child: Text(
+            _username.isNotEmpty ? _username[0].toUpperCase() : 'U',
+            style: TextStyle(
+              color: const Color(0xFFF8F8F8),
+              fontSize: size * 0.38,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+        ),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    );
+  }
+
+  Widget _buildCompactProfileCard() {
+    return _card(
+      margin: const EdgeInsets.only(top: 18),
+      padding: const EdgeInsets.all(18),
+      child: Row(
         children: [
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
+          Stack(
+            clipBehavior: Clip.none,
+            alignment: Alignment.center,
             children: [
-              _buildMiniPill(label: _currentTitle, filled: true),
-              _buildMiniPill(label: 'Lv $_prestigeLevel'),
-              _buildMiniPill(label: 'Streak $_currentStreak'),
-            ],
-          ),
-          const SizedBox(height: 14),
-          Text(
-            'Hey, $_username',
-            style: const TextStyle(
-              color: Color(0xFFF5F5F5),
-              fontSize: 28,
-              fontWeight: FontWeight.w800,
-              height: 1.1,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'You are building a $_currentTitle identity. Keep stacking verified wins so friends instantly see progress, level, and accountability strength.',
-            style: const TextStyle(
-              color: Color(0xFFB3B3BB),
-              height: 1.45,
-              fontSize: 14,
-            ),
-          ),
-          const SizedBox(height: 18),
-          Row(
-            children: [
-              Expanded(
-                child: _buildMetricChip(
-                  label: 'Points',
-                  value: _executionPoints.toString(),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: _buildMetricChip(
-                  label: 'All-Time Done',
-                  value: '$_allTimeDone',
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: _buildMetricChip(
-                  label: 'Current Streak',
-                  value: _currentStreak.toString(),
+              _profileAvatar(size: 68),
+              Positioned(
+                bottom: -6,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 5,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF8F8F8),
+                    borderRadius: BorderRadius.circular(999),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.white.withValues(alpha: 0.08),
+                        blurRadius: 18,
+                        offset: const Offset(0, 8),
+                      ),
+                    ],
+                  ),
+                  child: Text(
+                    'LV $_prestigeLevel',
+                    style: const TextStyle(
+                      color: Colors.black,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 0.2,
+                    ),
+                  ),
                 ),
               ),
             ],
+          ),
+          const SizedBox(width: 18),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _username,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xFFF8F8F8),
+                    fontSize: 24,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: -0.6,
+                    height: 1,
+                  ),
+                ),
+                if (_publicHandle.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    '@$_publicHandle',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Color(0xFF8C8C96),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    _miniBadge(_currentTitle),
+                    _miniBadge('$_currentStreak day streak'),
+                    _xpBadge(),
+                  ],
+                ),
+              ],
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildMainGrid() {
+  Widget _miniBadge(String text) {
+    if (text.trim().isEmpty) return const SizedBox.shrink();
+
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
       decoration: BoxDecoration(
-        color: const Color(0xFF17171A),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFF232329)),
+        color: const Color(0xFF202026),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: const Color(0xFF303038)),
       ),
+      child: Text(
+        text,
+        style: const TextStyle(
+          color: Color(0xFFF8F8F8),
+          fontSize: 12,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
+
+  Widget _xpBadge() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+      decoration: BoxDecoration(
+        color: const Color(0xFF202026),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: const Color(0xFF303038)),
+      ),
+      child: AnimatedPointsText(
+        value: _executionPoints,
+        suffix: ' XP',
+        style: const TextStyle(
+          color: Color(0xFFF8F8F8),
+          fontSize: 12,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSocialGrid() {
+    return _card(
+      margin: const EdgeInsets.only(top: 16),
+      padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _buildSectionTitle(
-            'Social hub',
-            subtitle: 'Four clean entry points for your accountability system.',
+          const Text(
+            'Accountability',
+            style: TextStyle(
+              color: Color(0xFFF8F8F8),
+              fontSize: 21,
+              fontWeight: FontWeight.w900,
+              letterSpacing: -0.5,
+            ),
           ),
+          const SizedBox(height: 5),
+          const Text(
+            'Manage the people and permissions around your progress.',
+            style: TextStyle(
+              color: Color(0xFF8C8C96),
+              fontSize: 13,
+              height: 1.35,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 16),
           Row(
             children: [
               Expanded(
-                child: _buildActionCard(
-                  icon: Icons.group_outlined,
+                child: _socialActionCard(
+                  icon: Icons.group_rounded,
                   title: 'Friends',
-                  subtitle: 'Search and view status-rich profiles',
+                  subtitle: _friendCount == 0
+                      ? 'Find and add people'
+                      : '$_friendCount connected',
+                  count: _friendCount > 0 ? _friendCount.toString() : null,
                   onTap: _openFriends,
                 ),
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: _buildActionCard(
-                  icon: Icons.mail_outline,
+                child: _socialActionCard(
+                  icon: Icons.mark_email_unread_rounded,
                   title: 'Requests',
-                  subtitle: 'Incoming and sent invites',
+                  subtitle: _incomingRequestCount == 0
+                      ? 'No pending invites'
+                      : '$_incomingRequestCount waiting',
+                  count: _incomingRequestCount > 0
+                      ? _incomingRequestCount.toString()
+                      : null,
                   onTap: _openRequests,
                 ),
               ),
@@ -872,19 +560,19 @@ class _SocialScreenState extends State<SocialScreen> {
           Row(
             children: [
               Expanded(
-                child: _buildActionCard(
-                  icon: Icons.verified_user_outlined,
+                child: _socialActionCard(
+                  icon: Icons.verified_user_rounded,
                   title: 'Verification',
-                  subtitle: 'Manage verifiers and reviews',
+                  subtitle: 'Review proof settings',
                   onTap: _openVerification,
                 ),
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: _buildActionCard(
-                  icon: Icons.visibility_outlined,
+                child: _socialActionCard(
+                  icon: Icons.visibility_rounded,
                   title: 'Visibility',
-                  subtitle: 'Control shared progress',
+                  subtitle: _profileIsPublic ? 'Profile is public' : 'Profile is private',
                   onTap: _openVisibility,
                 ),
               ),
@@ -895,135 +583,90 @@ class _SocialScreenState extends State<SocialScreen> {
     );
   }
 
-  Widget _buildSnapshotCard() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFF17171A),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFF232329)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _buildSectionTitle(
-            'Accountability baseline',
-            subtitle: 'The profile details people should eventually recognize.',
-          ),
-          Row(
-            children: [
-              Expanded(
-                child: _buildMetricChip(
-                  label: 'Active Habits',
-                  value: '$_activeHabits',
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: _buildMetricChip(
-                  label: 'Active Goals',
-                  value: '$_activeGoals',
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: _buildMetricChip(
-                  label: 'Best Streak',
-                  value: _bestStreak.toString(),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          _buildInfoRow('Title', _currentTitle),
-          _buildInfoRow('Plan', _planTier.toUpperCase()),
-          _buildInfoRow('Strict mode', _strictMode ? 'Enabled' : 'Disabled'),
-          _buildInfoRow('Wake time', _formatTimeDisplay(_wakeTime)),
-          _buildInfoRow('Sleep time', _formatTimeDisplay(_sleepTime)),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildBadgeTile(Map<String, dynamic> row) {
-    final badge = row['badge_definitions'] as Map<String, dynamic>?;
-    final title = (badge?['title'] ?? 'Badge').toString();
-    final rarity = (badge?['rarity'] ?? 'common').toString();
-
-    return Container(
-      width: 150,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: const Color(0xFF101013),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: rarity == 'rare'
-              ? const Color(0xFFFFB74D)
-              : rarity == 'uncommon'
-                  ? const Color(0xFF4FC3F7)
-                  : const Color(0xFF232329),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            style: const TextStyle(
-              color: Color(0xFFF5F5F5),
-              fontSize: 13,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            rarity.toUpperCase(),
-            style: const TextStyle(
-              color: Color(0xFF9A9AA3),
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildActionCard({
+  Widget _socialActionCard({
     required IconData icon,
     required String title,
     required String subtitle,
     required VoidCallback onTap,
+    String? count,
   }) {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.all(14),
+        height: 142,
+        padding: const EdgeInsets.all(15),
         decoration: BoxDecoration(
-          color: const Color(0xFF101013),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: const Color(0xFF232329)),
+          color: const Color(0xFF1D1D22),
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: const Color(0xFF2B2B32)),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(icon, color: const Color(0xFFF5F5F5), size: 20),
-            const SizedBox(height: 12),
+            Row(
+              children: [
+                Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF25252B),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: const Color(0xFF33333B)),
+                  ),
+                  child: Icon(
+                    icon,
+                    color: const Color(0xFFF8F8F8),
+                    size: 21,
+                  ),
+                ),
+                const Spacer(),
+                if (count != null)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 9,
+                      vertical: 5,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF8F8F8),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      count,
+                      style: const TextStyle(
+                        color: Colors.black,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  )
+                else
+                  const Icon(
+                    Icons.chevron_right_rounded,
+                    color: Color(0xFF6F6F76),
+                    size: 22,
+                  ),
+              ],
+            ),
+            const Spacer(),
             Text(
               title,
               style: const TextStyle(
-                color: Color(0xFFF5F5F5),
-                fontSize: 14,
-                fontWeight: FontWeight.w700,
+                color: Color(0xFFF8F8F8),
+                fontSize: 16,
+                fontWeight: FontWeight.w900,
+                letterSpacing: -0.2,
               ),
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: 5),
             Text(
               subtitle,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
               style: const TextStyle(
-                color: Color(0xFF9A9AA3),
+                color: Color(0xFF8C8C96),
                 fontSize: 12,
-                height: 1.35,
+                height: 1.3,
+                fontWeight: FontWeight.w600,
               ),
             ),
           ],
@@ -1032,134 +675,76 @@ class _SocialScreenState extends State<SocialScreen> {
     );
   }
 
-  Widget _buildDrawerTile({
-    required IconData icon,
-    required String title,
-    required String subtitle,
-    required VoidCallback onTap,
-    bool isDanger = false,
-  }) {
-    return Container(
-      margin: const EdgeInsets.only(top: 10),
-      decoration: BoxDecoration(
-        color: const Color(0xFF101013),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: isDanger ? const Color(0xFF4A2525) : const Color(0xFF232329),
-        ),
-      ),
-      child: ListTile(
-        onTap: onTap,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
-        leading: Icon(
-          icon,
-          color: isDanger
-              ? const Color(0xFFFF8A80)
-              : const Color(0xFF9A9AA3),
-        ),
-        title: Text(
-          title,
-          style: TextStyle(
-            color: isDanger
-                ? const Color(0xFFFF8A80)
-                : const Color(0xFFF5F5F5),
-            fontSize: 14,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-        subtitle: Text(
-          subtitle,
-          style: const TextStyle(
-            color: Color(0xFF9A9AA3),
-            fontSize: 12,
-            height: 1.35,
-          ),
-        ),
-        trailing: Icon(
-          isDanger ? Icons.logout : Icons.chevron_right,
-          color: isDanger
-              ? const Color(0xFFFF8A80)
-              : const Color(0xFF6F6F76),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildDrawer() {
+  Widget _settingsDrawer() {
     return Drawer(
-      backgroundColor: const Color(0xFF0F0F0F),
+      backgroundColor: const Color(0xFF09090B),
       child: SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(14, 14, 14, 20),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Container(
-                padding: const EdgeInsets.all(18),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF17171A),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: const Color(0xFF232329)),
+              _drawerHeader(),
+              const SizedBox(height: 16),
+              const Padding(
+                padding: EdgeInsets.only(left: 4, bottom: 2),
+                child: Text(
+                  'Settings',
+                  style: TextStyle(
+                    color: Color(0xFFF8F8F8),
+                    fontSize: 22,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: -0.5,
+                  ),
                 ),
-                child: Row(
+              ),
+              const SizedBox(height: 8),
+              Expanded(
+                child: ListView(
+                  physics: const BouncingScrollPhysics(),
                   children: [
-                    _buildProfileAvatarButton(),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'Control Center',
-                            style: TextStyle(
-                              color: Color(0xFFF5F5F5),
-                              fontSize: 16,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            '$_currentTitle • Lv $_prestigeLevel',
-                            style: const TextStyle(
-                              color: Color(0xFF9A9AA3),
-                              fontSize: 12,
-                            ),
-                          ),
-                        ],
-                      ),
+                    _drawerTile(
+                      icon: Icons.notifications_active_rounded,
+                      title: 'Reminder tones',
+                      subtitle: 'Sounds for reminders, warnings, and missed windows',
+                      onTap: () => _showComingSoonSetting('Reminder tone'),
+                    ),
+                    _drawerTile(
+                      icon: Icons.flash_on_rounded,
+                      title: 'Quick add',
+                      subtitle: 'Defaults for fast habit and goal creation',
+                      onTap: () => _showComingSoonSetting('Quick add'),
+                    ),
+                    _drawerTile(
+                      icon: Icons.today_rounded,
+                      title: 'Daily planning',
+                      subtitle: 'Planning prompts, startup flow, and shutdown flow',
+                      onTap: () => _showComingSoonSetting('Daily planning'),
+                    ),
+                    _drawerTile(
+                      icon: Icons.lock_rounded,
+                      title: 'Strict mode',
+                      subtitle: 'Failure windows and accountability rules',
+                      onTap: () => _showComingSoonSetting('Strict mode'),
+                    ),
+                    _drawerTile(
+                      icon: Icons.palette_rounded,
+                      title: 'Appearance',
+                      subtitle: 'Theme, density, and profile display options',
+                      onTap: () => _showComingSoonSetting('Appearance'),
+                    ),
+                    _drawerTile(
+                      icon: Icons.person_rounded,
+                      title: 'Account',
+                      subtitle: 'Profile, plan, email, and security settings',
+                      onTap: () => _showComingSoonSetting('Account'),
                     ),
                   ],
                 ),
               ),
-              const SizedBox(height: 18),
-              _buildDrawerTile(
-                icon: Icons.group_outlined,
-                title: 'Friends',
-                subtitle: 'Friends list and public identity preview',
-                onTap: _openFriends,
-              ),
-              _buildDrawerTile(
-                icon: Icons.mail_outline,
-                title: 'Requests',
-                subtitle: 'Incoming and outgoing friend requests',
-                onTap: _openRequests,
-              ),
-              _buildDrawerTile(
-                icon: Icons.verified_user_outlined,
-                title: 'Verification',
-                subtitle: 'Manage verifiers and partner review setup',
-                onTap: _openVerification,
-              ),
-              _buildDrawerTile(
-                icon: Icons.visibility_outlined,
-                title: 'Visibility',
-                subtitle: 'Control what others can see',
-                onTap: _openVisibility,
-              ),
-              const Spacer(),
-              _buildDrawerTile(
-                icon: Icons.logout,
-                title: _isSigningOut ? 'Signing Out...' : 'Sign Out',
+              _drawerTile(
+                icon: Icons.logout_rounded,
+                title: _isSigningOut ? 'Signing out...' : 'Sign out',
                 subtitle: 'End your current session',
                 isDanger: true,
                 onTap: _isSigningOut ? () {} : _signOut,
@@ -1171,36 +756,68 @@ class _SocialScreenState extends State<SocialScreen> {
     );
   }
 
-  Widget _buildInfoRow(String label, String value) {
+  Widget _drawerHeader() {
     return Container(
-      margin: const EdgeInsets.only(top: 10),
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: const Color(0xFF101013),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFF232329)),
+        color: const Color(0xFF151519),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: const Color(0xFF292930)),
       ),
       child: Row(
         children: [
+          _profileAvatar(size: 52),
+          const SizedBox(width: 13),
           Expanded(
-            child: Text(
-              label,
-              style: const TextStyle(
-                color: Color(0xFF9A9AA3),
-                fontSize: 13,
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Flexible(
-            child: Text(
-              value,
-              textAlign: TextAlign.right,
-              style: const TextStyle(
-                color: Color(0xFFF5F5F5),
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _username,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xFFF8F8F8),
+                    fontSize: 16,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Row(
+                  children: [
+                    Text(
+                      'LV $_prestigeLevel',
+                      style: const TextStyle(
+                        color: Color(0xFF8C8C96),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(width: 7),
+                    const Text(
+                      '•',
+                      style: TextStyle(
+                        color: Color(0xFF55555C),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(width: 7),
+                    Expanded(
+                      child: Text(
+                        _currentTitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Color(0xFF8C8C96),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
           ),
         ],
@@ -1208,10 +825,73 @@ class _SocialScreenState extends State<SocialScreen> {
     );
   }
 
+  Widget _drawerTile({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required VoidCallback onTap,
+    bool isDanger = false,
+  }) {
+    return Container(
+      margin: const EdgeInsets.only(top: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF151519),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: isDanger ? const Color(0xFF4A2525) : const Color(0xFF292930),
+        ),
+      ),
+      child: ListTile(
+        onTap: onTap,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+        leading: Container(
+          width: 38,
+          height: 38,
+          decoration: BoxDecoration(
+            color: isDanger ? const Color(0xFF231313) : const Color(0xFF202026),
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Icon(
+            icon,
+            color: isDanger
+                ? const Color(0xFFFF8A80)
+                : const Color(0xFFF8F8F8),
+            size: 20,
+          ),
+        ),
+        title: Text(
+          title,
+          style: TextStyle(
+            color: isDanger
+                ? const Color(0xFFFF8A80)
+                : const Color(0xFFF8F8F8),
+            fontSize: 14,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+        subtitle: Text(
+          subtitle,
+          style: const TextStyle(
+            color: Color(0xFF8C8C96),
+            fontSize: 12,
+            height: 1.35,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        trailing: Icon(
+          isDanger ? Icons.logout_rounded : Icons.chevron_right_rounded,
+          color: isDanger
+              ? const Color(0xFFFF8A80)
+              : const Color(0xFF6F6F76),
+        ),
+      ),
+    );
+  }
+
   Widget _buildBody() {
     if (_isLoading) {
       return const Center(
-        child: CircularProgressIndicator(color: Color(0xFFF5F5F5)),
+        child: CircularProgressIndicator(color: Color(0xFFF8F8F8)),
       );
     }
 
@@ -1222,7 +902,10 @@ class _SocialScreenState extends State<SocialScreen> {
           child: Text(
             _error!,
             textAlign: TextAlign.center,
-            style: const TextStyle(color: Color(0xFFB3B3BB)),
+            style: const TextStyle(
+              color: Color(0xFFB8B8C0),
+              height: 1.4,
+            ),
           ),
         ),
       );
@@ -1234,26 +917,13 @@ class _SocialScreenState extends State<SocialScreen> {
         physics: const BouncingScrollPhysics(
           parent: AlwaysScrollableScrollPhysics(),
         ),
-        padding: const EdgeInsets.fromLTRB(16, 18, 16, 28),
+        padding: const EdgeInsets.fromLTRB(18, 18, 18, 34),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Stack(
-              alignment: Alignment.center,
-              children: [
-                _buildTopBar(),
-                Positioned(
-                  right: 0,
-                  child: _buildProfileAvatarButton(),
-                ),
-              ],
-            ),
-            const SizedBox(height: 18),
-            _buildHeroCard(),
-            const SizedBox(height: 18),
-            _buildMainGrid(),
-            const SizedBox(height: 18),
-            _buildSnapshotCard(),
+            _buildTopBar(),
+            _buildCompactProfileCard(),
+            _buildSocialGrid(),
           ],
         ),
       ),
@@ -1264,20 +934,11 @@ class _SocialScreenState extends State<SocialScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       key: _scaffoldKey,
-      backgroundColor: const Color(0xFF0B0B0C),
-      drawer: _buildDrawer(),
+      backgroundColor: const Color(0xFF09090B),
+      drawer: _settingsDrawer(),
       body: SafeArea(
         child: _buildBody(),
       ),
     );
-  }
-}
-
-class _ProfileAvatarSpacer extends StatelessWidget {
-  const _ProfileAvatarSpacer();
-
-  @override
-  Widget build(BuildContext context) {
-    return const SizedBox(width: 44, height: 44);
   }
 }

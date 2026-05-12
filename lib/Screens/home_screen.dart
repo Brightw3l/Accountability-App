@@ -332,6 +332,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
           base_points,
           penalty_points,
           tier_weight,
+          preferred_time_of_day,
           active
           ''',
         )
@@ -369,6 +370,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         'base_points': row['base_points'],
         'penalty_points': row['penalty_points'],
         'tier_weight': row['tier_weight'],
+        'preferred_time_of_day': row['preferred_time_of_day'],
       });
     }
 

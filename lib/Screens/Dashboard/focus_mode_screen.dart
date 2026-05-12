@@ -1,5 +1,6 @@
 // ignore_for_file: deprecated_member_use, use_build_context_synchronously
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:achievr_app/Providers/focus_runtime_controller_provider.dart';
@@ -44,6 +45,8 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
   String? _lastHandledPenaltyStatus;
   bool _isApplyingAutoFailurePenalty = false;
 
+  Timer? _uiClockTimer;
+
   bool get _supportsNativeFocusRuntime => !kIsWeb && Platform.isAndroid;
 
   @override
@@ -51,6 +54,11 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
     super.initState();
 
     AppClock.debugNowNotifier.addListener(_handleClockChange);
+
+    _uiClockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      setState(() {});
+    });
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final controller = ref.read(focusRuntimeControllerProvider);
@@ -67,6 +75,7 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
   @override
   void dispose() {
     AppClock.debugNowNotifier.removeListener(_handleClockChange);
+    _uiClockTimer?.cancel();
     super.dispose();
   }
 

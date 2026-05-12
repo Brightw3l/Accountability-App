@@ -19,6 +19,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:achievr_app/Services/bright_monitoring_service.dart';
 
 class TodayScreen extends ConsumerStatefulWidget {
   const TodayScreen({super.key});
@@ -34,8 +35,53 @@ class _TodayScreenState extends ConsumerState<TodayScreen> {
   final VerificationService _verificationService = VerificationService();
   final HabitLocationService _habitLocationService = HabitLocationService();
   final BadgeService _badgeService = BadgeService();
+  final BrightMonitoringService _brightMonitoringService =
+    BrightMonitoringService();
   final LocationRuntimeService _locationRuntimeService =
       LocationRuntimeService();
+
+  static const List<Map<String, String>> _missReasonOptions = [
+  {
+    'value': 'bad_timing',
+    'label': 'Bad timing',
+  },
+  {
+    'value': 'too_tired',
+    'label': 'Too tired',
+  },
+  {
+    'value': 'forgot',
+    'label': 'Forgot',
+  },
+  {
+    'value': 'too_long',
+    'label': 'Too long',
+  },
+  {
+    'value': 'unexpected_event',
+    'label': 'Unexpected event',
+  },
+  {
+    'value': 'unclear_task',
+    'label': 'Task was unclear',
+  },
+  {
+    'value': 'low_motivation',
+    'label': 'Low motivation',
+  },
+  {
+    'value': 'environment_issue',
+    'label': 'Environment issue',
+  },
+  {
+    'value': 'verification_problem',
+    'label': 'Verification problem',
+  },
+  {
+    'value': 'other',
+    'label': 'Other',
+  },
+];
 
   Map<String, dynamic>? profile;
   List<Map<String, dynamic>> todayLogs = [];
@@ -134,6 +180,314 @@ class _TodayScreenState extends ConsumerState<TodayScreen> {
     }
   }
 
+  Future<String?> _findOpenBrightEventIdForLog({
+  required String userId,
+  required String logId,
+}) async {
+  final response = await supabase
+      .from('bright_events')
+      .select('event_id')
+      .eq('user_id', userId)
+      .eq('log_id', logId)
+      .inFilter('status', ['unread', 'seen'])
+      .order('created_at', ascending: false)
+      .limit(1)
+      .maybeSingle();
+
+  if (response == null) return null;
+  return response['event_id']?.toString();
+}
+
+Future<bool> _hasCheckinForLog({
+  required String userId,
+  required String logId,
+}) async {
+  final response = await supabase
+      .from('bright_checkins')
+      .select('checkin_id')
+      .eq('user_id', userId)
+      .eq('log_id', logId)
+      .limit(1)
+      .maybeSingle();
+
+  return response != null;
+}
+
+Future<void> _openMissedReasonSheet(Map<String, dynamic> log) async {
+  final user = supabase.auth.currentUser;
+  final logId = log['log_id']?.toString();
+  final habitId = _extractHabitId(log);
+  final habitTitle = _extractHabitTitle(log);
+
+  if (user == null) return;
+  if (logId == null || logId.isEmpty) return;
+  if (habitId == null || habitId.isEmpty) return;
+
+  final alreadyExplained = await _hasCheckinForLog(
+    userId: user.id,
+    logId: logId,
+  );
+
+  if (alreadyExplained) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('BRIGHT already has a reason for this missed task.'),
+      ),
+    );
+    return;
+  }
+
+  final noteController = TextEditingController();
+  const int minReasonLength = 10;
+
+  String selectedReason = 'bad_timing';
+  bool shareWithPartners = true;
+
+  final submitted = await showModalBottomSheet<bool>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: const Color(0xFF17171A),
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+    ),
+    builder: (sheetContext) {
+      return StatefulBuilder(
+        builder: (context, setSheetState) {
+          final reasonLength = noteController.text.trim().length;
+          final canSaveReason = reasonLength >= minReasonLength;
+
+          return Padding(
+            padding: EdgeInsets.fromLTRB(
+              16,
+              16,
+              16,
+              MediaQuery.of(context).viewInsets.bottom + 20,
+            ),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Center(
+                    child: Text(
+                      'Tell BRIGHT what happened',
+                      style: TextStyle(
+                        color: Color(0xFFF5F5F5),
+                        fontSize: 20,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Center(
+                    child: Text(
+                      'You missed $habitTitle. Your reason helps BRIGHT understand whether this was a one-off miss or a system problem.',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: Color(0xFFB3B3BB),
+                        height: 1.4,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  const Text(
+                    'Main reason',
+                    style: TextStyle(
+                      color: Color(0xFFF5F5F5),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: _missReasonOptions.map((option) {
+                      final value = option['value']!;
+                      final label = option['label']!;
+                      final selected = selectedReason == value;
+
+                      return ChoiceChip(
+                        label: Text(label),
+                        selected: selected,
+                        onSelected: (_) {
+                          setSheetState(() {
+                            selectedReason = value;
+                          });
+                        },
+                        selectedColor: const Color(0xFFF5F5F5),
+                        backgroundColor: const Color(0xFF101013),
+                        labelStyle: TextStyle(
+                          color:
+                              selected ? Colors.black : const Color(0xFFF5F5F5),
+                          fontWeight: FontWeight.w700,
+                        ),
+                        side: const BorderSide(color: Color(0xFF2A2A2F)),
+                      );
+                    }).toList(),
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: noteController,
+                    maxLines: 4,
+                    onChanged: (_) {
+                      setSheetState(() {});
+                    },
+                    style: const TextStyle(color: Colors.white),
+                    decoration: InputDecoration(
+                      labelText: 'Raw reason',
+                      hintText:
+                          'Example: I was exhausted after school and kept scrolling instead of starting.',
+                      labelStyle: const TextStyle(color: Colors.white70),
+                      hintStyle: const TextStyle(color: Color(0xFF777780)),
+                      filled: true,
+                      fillColor: const Color(0xFF101013),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(14),
+                        borderSide: const BorderSide(color: Color(0xFF2A2A2F)),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(14),
+                        borderSide: const BorderSide(color: Color(0xFF2A2A2F)),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(14),
+                        borderSide: const BorderSide(color: Color(0xFFF5F5F5)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 7),
+                  Text(
+                    '$reasonLength/$minReasonLength minimum characters',
+                    style: TextStyle(
+                      color: canSaveReason
+                          ? const Color(0xFF81C784)
+                          : const Color(0xFF9A9AA3),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF101013),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: const Color(0xFF232329)),
+                    ),
+                    child: SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      value: shareWithPartners,
+                      onChanged: (value) {
+                        setSheetState(() {
+                          shareWithPartners = value;
+                        });
+                      },
+                      activeThumbColor: const Color(0xFFF5F5F5),
+                      title: const Text(
+                        'Share with accountability partners',
+                        style: TextStyle(
+                          color: Color(0xFFF5F5F5),
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      subtitle: const Text(
+                        'Your raw reason will be visible to accepted accountability partners.',
+                        style: TextStyle(
+                          color: Color(0xFF9A9AA3),
+                          height: 1.35,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: canSaveReason
+                          ? () {
+                              Navigator.pop(sheetContext, true);
+                            }
+                          : null,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFF5F5F5),
+                        foregroundColor: Colors.black,
+                        disabledBackgroundColor: const Color(0xFF2A2A2F),
+                        disabledForegroundColor: const Color(0xFF777780),
+                        elevation: 0,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                      ),
+                      child: const Text(
+                        'Save Reason',
+                        style: TextStyle(fontWeight: FontWeight.w900),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      );
+    },
+  );
+
+  if (submitted != true) {
+    noteController.dispose();
+    return;
+  }
+
+  final rawReason = noteController.text.trim();
+  noteController.dispose();
+
+  if (rawReason.isEmpty) return;
+
+  try {
+    final eventId = await _findOpenBrightEventIdForLog(
+      userId: user.id,
+      logId: logId,
+    );
+
+    await _brightMonitoringService.recordMissedTaskReason(
+      userId: user.id,
+      habitId: habitId,
+      logId: logId,
+      eventId: eventId,
+      reasonCategory: selectedReason,
+      rawReason: rawReason,
+      shareWithPartners: shareWithPartners,
+    );
+
+    await _loadTodayData();
+
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          shareWithPartners
+              ? 'Reason saved and shared with accountability partners.'
+              : 'Reason saved privately for BRIGHT.',
+        ),
+      ),
+    );
+  } catch (e, st) {
+    debugPrint('SAVE MISSED REASON ERROR: $e');
+    debugPrint('$st');
+
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Failed to save reason: $e')),
+    );
+  }
+}
+
   int _timeToMinutes(String? hhmmss) {
     if (hhmmss == null || hhmmss.isEmpty) return 999999;
 
@@ -194,6 +548,7 @@ class _TodayScreenState extends ConsumerState<TodayScreen> {
         ..sort(_compareLogsByStartTime);
 
       await _applyMissedPenaltiesIfNeeded(logs);
+      await _brightMonitoringService.monitorMissedTasks(userId: user.id);
 
       if (!mounted) return;
 
@@ -1427,11 +1782,40 @@ class _TodayScreenState extends ConsumerState<TodayScreen> {
       );
     }
 
-    if (state == 'pending_verification' || state == 'submitted') {
-      return _buildPassiveActionChip(
-        text: 'Awaiting review',
-        color: const Color(0xFF4FC3F7),
-        bg: const Color(0x224FC3F7),
+    if (state == 'missed' || state == 'failed' || state == 'rejected') {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _buildPassiveActionChip(
+            text: _taskStateLabel(state),
+            color: const Color(0xFFE57373),
+            bg: const Color(0x22E57373),
+          ),
+          const SizedBox(width: 8),
+          ElevatedButton.icon(
+            onPressed: () => _openMissedReasonSheet(log),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFF5F5F5),
+              foregroundColor: Colors.black,
+              elevation: 0,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
+            icon: const Icon(
+              Icons.auto_awesome_rounded,
+              size: 15,
+            ),
+            label: const Text(
+              'Tell BRIGHT why',
+              style: TextStyle(
+                fontWeight: FontWeight.w800,
+                fontSize: 12,
+              ),
+            ),
+          ),
+        ],
       );
     }
 

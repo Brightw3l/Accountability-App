@@ -5,6 +5,7 @@ import 'package:achievr_app/Screens/Dashboard/upcoming_screen.dart';
 import 'package:achievr_app/Screens/Dashboard/bright_screen.dart';
 import 'package:achievr_app/Screens/Dashboard/progress_screen.dart';
 import 'package:achievr_app/Screens/Dashboard/social_screen.dart';
+import 'package:achievr_app/Widgets/draggable_app_clock.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -268,6 +269,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                         AppClock.setDebugTime(selected);
                         Navigator.pop(context);
                         _refreshAllTabs();
+
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
                             content: Text(
@@ -299,6 +301,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                         AppClock.clearDebugTime();
                         Navigator.pop(context);
                         _refreshAllTabs();
+
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(
                             content: Text('Returned to real device time.'),
@@ -321,94 +324,82 @@ class _DashboardScreenState extends State<DashboardScreen>
     );
   }
 
-  FloatingActionButton _buildClockFab() {
-    return FloatingActionButton.extended(
-      onPressed: _openDebugClockSheet,
-      backgroundColor: const Color(0xFF17171A),
-      foregroundColor: const Color(0xFFF5F5F5),
-      elevation: 0,
-      label: Text(
-        AppClock.isDebugClockEnabled ? 'Debug Time' : 'Clock',
-        style: const TextStyle(fontWeight: FontWeight.w700),
-      ),
-      icon: const Icon(Icons.schedule),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFF0B0B0C),
-      body: IndexedStack(
-        index: _currentIndex,
-        children: _pages,
-      ),
-      floatingActionButton: _buildClockFab(),
-      bottomNavigationBar: Container(
-        decoration: const BoxDecoration(
-          border: Border(
-            top: BorderSide(
-              color: Color(0xFF1E1E22),
-              width: 0.8,
-            ),
-          ),
+    return DraggableAppClock(
+      onTap: _openDebugClockSheet,
+      child: Scaffold(
+        backgroundColor: const Color(0xFF0B0B0C),
+        body: IndexedStack(
+          index: _currentIndex,
+          children: _pages,
         ),
-        child: Theme(
-          data: Theme.of(context).copyWith(
-            splashColor: Colors.transparent,
-            highlightColor: Colors.transparent,
-            hoverColor: Colors.transparent,
-            splashFactory: NoSplash.splashFactory,
+        bottomNavigationBar: Container(
+          decoration: const BoxDecoration(
+            border: Border(
+              top: BorderSide(
+                color: Color(0xFF1E1E22),
+                width: 0.8,
+              ),
+            ),
           ),
-          child: BottomNavigationBar(
-            currentIndex: _currentIndex,
-            onTap: _handleTabTap,
-            type: BottomNavigationBarType.fixed,
-            backgroundColor: const Color(0xFF121214),
-            elevation: 0,
-            enableFeedback: false,
-            selectedItemColor: const Color(0xFFF5F5F5),
-            unselectedItemColor: const Color(0xFF6F6F76),
-            selectedFontSize: 11,
-            unselectedFontSize: 11,
-            selectedLabelStyle: const TextStyle(
-              fontWeight: FontWeight.w600,
-              letterSpacing: 0.1,
+          child: Theme(
+            data: Theme.of(context).copyWith(
+              splashColor: Colors.transparent,
+              highlightColor: Colors.transparent,
+              hoverColor: Colors.transparent,
+              splashFactory: NoSplash.splashFactory,
             ),
-            unselectedLabelStyle: const TextStyle(
-              fontWeight: FontWeight.w500,
-              letterSpacing: 0.1,
+            child: BottomNavigationBar(
+              currentIndex: _currentIndex,
+              onTap: _handleTabTap,
+              type: BottomNavigationBarType.fixed,
+              backgroundColor: const Color(0xFF121214),
+              elevation: 0,
+              enableFeedback: false,
+              selectedItemColor: const Color(0xFFF5F5F5),
+              unselectedItemColor: const Color(0xFF6F6F76),
+              selectedFontSize: 11,
+              unselectedFontSize: 11,
+              selectedLabelStyle: const TextStyle(
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0.1,
+              ),
+              unselectedLabelStyle: const TextStyle(
+                fontWeight: FontWeight.w500,
+                letterSpacing: 0.1,
+              ),
+              selectedIconTheme: const IconThemeData(size: 22, opacity: 1),
+              unselectedIconTheme: const IconThemeData(size: 22, opacity: 1),
+              showUnselectedLabels: true,
+              items: const [
+                BottomNavigationBarItem(
+                  icon: Icon(Icons.today_outlined),
+                  activeIcon: Icon(Icons.today),
+                  label: 'Today',
+                ),
+                BottomNavigationBarItem(
+                  icon: Icon(Icons.calendar_month_outlined),
+                  activeIcon: Icon(Icons.calendar_month),
+                  label: 'Upcoming',
+                ),
+                BottomNavigationBarItem(
+                  icon: Icon(Icons.auto_awesome_outlined),
+                  activeIcon: Icon(Icons.auto_awesome),
+                  label: 'Bright',
+                ),
+                BottomNavigationBarItem(
+                  icon: Icon(Icons.bar_chart_outlined),
+                  activeIcon: Icon(Icons.bar_chart),
+                  label: 'Progress',
+                ),
+                BottomNavigationBarItem(
+                  icon: Icon(Icons.groups_outlined),
+                  activeIcon: Icon(Icons.groups),
+                  label: 'Social',
+                ),
+              ],
             ),
-            selectedIconTheme: const IconThemeData(size: 22, opacity: 1),
-            unselectedIconTheme: const IconThemeData(size: 22, opacity: 1),
-            showUnselectedLabels: true,
-            items: const [
-              BottomNavigationBarItem(
-                icon: Icon(Icons.today_outlined),
-                activeIcon: Icon(Icons.today),
-                label: 'Today',
-              ),
-              BottomNavigationBarItem(
-                icon: Icon(Icons.calendar_month_outlined),
-                activeIcon: Icon(Icons.calendar_month),
-                label: 'Upcoming',
-              ),
-              BottomNavigationBarItem(
-                icon: Icon(Icons.auto_awesome_outlined),
-                activeIcon: Icon(Icons.auto_awesome),
-                label: 'Bright',
-              ),
-              BottomNavigationBarItem(
-                icon: Icon(Icons.bar_chart_outlined),
-                activeIcon: Icon(Icons.bar_chart),
-                label: 'Progress',
-              ),
-              BottomNavigationBarItem(
-                icon: Icon(Icons.groups_outlined),
-                activeIcon: Icon(Icons.groups),
-                label: 'Social',
-              ),
-            ],
           ),
         ),
       ),

@@ -181,6 +181,7 @@ class _TimeConstraintScreenState extends State<TimeConstraintScreen> {
         'metrics': goal['metrics'] ?? '',
         'habits': rawHabits.map<Map<String, dynamic>>((habit) {
           if (habit is Map<String, dynamic>) {
+            
             return {
               'habit_id': habit['habit_id'],
               'habit_template_id': habit['habit_template_id'],
@@ -201,6 +202,7 @@ class _TimeConstraintScreenState extends State<TimeConstraintScreen> {
               'base_points': habit['base_points'],
               'penalty_points': habit['penalty_points'],
               'tier_weight': habit['tier_weight'],
+              'preferred_time_of_day': habit['preferred_time_of_day'],
             };
           }
 

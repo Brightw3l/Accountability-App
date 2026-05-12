@@ -1,3 +1,7 @@
+// ignore_for_file: deprecated_member_use
+
+import 'dart:math' as math;
+
 import 'package:achievr_app/Services/app_clock.dart';
 import 'package:achievr_app/Widgets/hold_to_refresh_wrapper.dart';
 import 'package:flutter/material.dart';
@@ -62,7 +66,9 @@ class _ProgressScreenState extends State<ProgressScreen> {
     final logDateRaw = log['log_date']?.toString();
     final startRaw = log['scheduled_start']?.toString();
 
-    if (logDateRaw == null || startRaw == null || startRaw.isEmpty) return null;
+    if (logDateRaw == null || startRaw == null || startRaw.isEmpty) {
+      return null;
+    }
 
     final dateParts = logDateRaw.split('-');
     final timeParts = startRaw.split(':');
@@ -82,7 +88,9 @@ class _ProgressScreenState extends State<ProgressScreen> {
     final logDateRaw = log['log_date']?.toString();
     final endRaw = log['scheduled_end']?.toString();
 
-    if (logDateRaw == null || endRaw == null || endRaw.isEmpty) return null;
+    if (logDateRaw == null || endRaw == null || endRaw.isEmpty) {
+      return null;
+    }
 
     final dateParts = logDateRaw.split('-');
     final timeParts = endRaw.split(':');
@@ -102,9 +110,13 @@ class _ProgressScreenState extends State<ProgressScreen> {
     final rawStatus = (log['status'] ?? 'pending').toString();
 
     if (rawStatus == 'done') return 'done';
-    if (rawStatus == 'missed' || rawStatus == 'failed' || rawStatus == 'rejected') {
+
+    if (rawStatus == 'missed' ||
+        rawStatus == 'failed' ||
+        rawStatus == 'rejected') {
       return 'missed';
     }
+
     if (rawStatus == 'submitted' || rawStatus == 'pending_verification') {
       return 'remaining';
     }
@@ -116,13 +128,8 @@ class _ProgressScreenState extends State<ProgressScreen> {
 
     final latestAllowed = end.add(_gracePeriod);
 
-    if (now.isBefore(start)) {
-      return 'upcoming';
-    }
-
-    if (now.isAfter(latestAllowed)) {
-      return 'missed';
-    }
+    if (now.isBefore(start)) return 'upcoming';
+    if (now.isAfter(latestAllowed)) return 'missed';
 
     return 'available';
   }
@@ -197,25 +204,31 @@ class _ProgressScreenState extends State<ProgressScreen> {
 
       final totalToday = todayLogs.length;
 
-      final doneToday =
-          todayLogs.where((log) => _classifyLogStatus(log, now) == 'done').length;
+      final doneToday = todayLogs
+          .where((log) => _classifyLogStatus(log, now) == 'done')
+          .length;
 
-      final upcomingToday =
-          todayLogs.where((log) => _classifyLogStatus(log, now) == 'upcoming').length;
+      final upcomingToday = todayLogs
+          .where((log) => _classifyLogStatus(log, now) == 'upcoming')
+          .length;
 
-      final availableNowToday =
-          todayLogs.where((log) => _classifyLogStatus(log, now) == 'available').length;
+      final availableNowToday = todayLogs
+          .where((log) => _classifyLogStatus(log, now) == 'available')
+          .length;
 
-      final missedToday =
-          todayLogs.where((log) => _classifyLogStatus(log, now) == 'missed').length;
+      final missedToday = todayLogs
+          .where((log) => _classifyLogStatus(log, now) == 'missed')
+          .length;
 
       final totalThisWeek = weeklyLogs.length;
 
-      final doneThisWeek =
-          weeklyLogs.where((log) => _classifyLogStatus(log, now) == 'done').length;
+      final doneThisWeek = weeklyLogs
+          .where((log) => _classifyLogStatus(log, now) == 'done')
+          .length;
 
-      final missedThisWeek =
-          weeklyLogs.where((log) => _classifyLogStatus(log, now) == 'missed').length;
+      final missedThisWeek = weeklyLogs
+          .where((log) => _classifyLogStatus(log, now) == 'missed')
+          .length;
 
       final remainingThisWeek = weeklyLogs.where((log) {
         final status = _classifyLogStatus(log, now);
@@ -242,6 +255,7 @@ class _ProgressScreenState extends State<ProgressScreen> {
 
         _totalDoneAllTime = allDoneLogs.length;
         _currentStreak = streak;
+
         _isLoading = false;
       });
     } catch (e, st) {
@@ -284,12 +298,9 @@ class _ProgressScreenState extends State<ProgressScreen> {
 
       final dayLogs = groupedByDate[dateString];
 
-      if (dayLogs == null || dayLogs.isEmpty) {
-        break;
-      }
+      if (dayLogs == null || dayLogs.isEmpty) break;
 
-      final hasDone =
-          dayLogs.any((log) => log['status'].toString() == 'done');
+      final hasDone = dayLogs.any((log) => log['status'].toString() == 'done');
 
       if (hasDone) {
         streak++;
@@ -323,124 +334,222 @@ class _ProgressScreenState extends State<ProgressScreen> {
     return (_doneThisWeek + _remainingThisWeek) / _totalThisWeek;
   }
 
-  bool get _hasTodayProgressBars => _totalToday > 0;
-  bool get _hasWeekProgressBars => _totalThisWeek > 0;
-  bool get _hasSummaryContent =>
-      _doneToday > 0 ||
-      _upcomingToday > 0 ||
-      _availableNowToday > 0 ||
-      _missedToday > 0 ||
-      _doneThisWeek > 0 ||
-      _remainingThisWeek > 0 ||
-      _missedThisWeek > 0 ||
-      _totalToday > 0;
+  int get _todayPercent => (_todayCompletionRate * 100).round();
 
-  Widget _buildMetricChip({
-    required String label,
-    required String value,
+  String get _heroTitle {
+    if (_totalToday == 0) return 'No commitments today';
+    if (_availableNowToday > 0) return 'You have work open now';
+    if (_missedToday > 0 && _upcomingToday == 0 && _availableNowToday == 0) {
+      return 'Today needs a reset';
+    }
+    if (_doneToday == _totalToday) return 'Today is complete';
+    if (_doneToday > 0) return 'Momentum is active';
+    return 'Today is waiting';
+  }
+
+  String get _heroMessage {
+    if (_totalToday == 0) {
+      return 'Nothing is scheduled today. Use the space deliberately or plan the next commitment.';
+    }
+
+    if (_availableNowToday > 0) {
+      return '$_availableNowToday commitment${_availableNowToday == 1 ? '' : 's'} can be executed right now.';
+    }
+
+    if (_doneToday == _totalToday) {
+      return 'All scheduled commitments for today are complete.';
+    }
+
+    if (_missedToday > 0 && _upcomingToday == 0) {
+      return '$_missedToday commitment${_missedToday == 1 ? '' : 's'} missed the execution window today.';
+    }
+
+    if (_upcomingToday > 0) {
+      return '$_upcomingToday commitment${_upcomingToday == 1 ? '' : 's'} still scheduled later today.';
+    }
+
+    return 'Keep the day controlled and protect the streak.';
+  }
+
+  String get _recommendation {
+    if (_availableNowToday > 0) {
+      return 'Do the available commitment now. This is the highest-leverage action because it directly improves today before the window closes.';
+    }
+
+    if (_missedToday > 0 && _remainingThisWeek > 0) {
+      return 'Today took a hit, but the week is still recoverable. Prioritize the next remaining weekly commitment.';
+    }
+
+    if (_doneToday == _totalToday && _totalToday > 0) {
+      return 'You finished today cleanly. Avoid adding noise; protect recovery, sleep, and tomorrow’s first commitment.';
+    }
+
+    if (_upcomingToday > 0) {
+      return 'Prepare for the next scheduled window. The goal is to make execution feel automatic when it opens.';
+    }
+
+    if (_currentStreak >= 7) {
+      return 'Your streak is becoming an asset. Keep the system boring, repeatable, and hard to break.';
+    }
+
+    return 'Start with one clear commitment. Consistency compounds when the next action is obvious.';
+  }
+
+  String _plural(int value, String word) {
+    return '$value $word${value == 1 ? '' : 's'}';
+  }
+
+  Widget _glassCard({
+    required Widget child,
+    EdgeInsetsGeometry padding = const EdgeInsets.all(18),
+    EdgeInsetsGeometry? margin,
   }) {
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 14),
+      margin: margin,
+      padding: padding,
       decoration: BoxDecoration(
-        color: const Color(0xFF101013),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFF232329)),
-      ),
-      child: Column(
-        children: [
-          Text(
-            value,
-            style: const TextStyle(
-              color: Color(0xFFF5F5F5),
-              fontSize: 20,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            label,
-            style: const TextStyle(
-              color: Color(0xFF9A9AA3),
-              fontSize: 12,
-            ),
+        color: const Color(0xFF151519),
+        borderRadius: BorderRadius.circular(28),
+        border: Border.all(color: const Color(0xFF292930)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.26),
+            blurRadius: 28,
+            offset: const Offset(0, 16),
           ),
         ],
       ),
+      child: child,
     );
   }
 
-  Widget _buildSectionTitle(String title, {String? subtitle}) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10, top: 4),
+  Widget _buildHeroCard() {
+    return _glassCard(
+      padding: const EdgeInsets.all(22),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            title,
-            style: const TextStyle(
-              color: Color(0xFFF5F5F5),
-              fontSize: 18,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          if (subtitle != null) ...[
-            const SizedBox(height: 3),
-            Text(
-              subtitle,
-              style: const TextStyle(
-                color: Color(0xFF9A9AA3),
-                fontSize: 13,
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Progress',
+                      style: TextStyle(
+                        color: Color(0xFFF8F8F8),
+                        fontSize: 31,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: -0.9,
+                        height: 1,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      _heroTitle,
+                      style: const TextStyle(
+                        color: Color(0xFFF8F8F8),
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.2,
+                      ),
+                    ),
+                    const SizedBox(height: 7),
+                    Text(
+                      _heroMessage,
+                      style: const TextStyle(
+                        color: Color(0xFF9D9DA8),
+                        fontSize: 14,
+                        height: 1.45,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
-          ],
+              const SizedBox(width: 18),
+              _ProgressRing(
+                value: _todayCompletionRate,
+                centerText: '$_todayPercent%',
+                footerText: 'today',
+              ),
+            ],
+          ),
+          const SizedBox(height: 22),
+          Row(
+            children: [
+              Expanded(
+                child: _HeroStat(
+                  value: '$_currentStreak',
+                  label: 'day streak',
+                  icon: Icons.local_fire_department_rounded,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _HeroStat(
+                  value: '$_totalDoneAllTime',
+                  label: 'all-time done',
+                  icon: Icons.check_circle_rounded,
+                ),
+              ),
+            ],
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildTopCard() {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: const Color(0xFF17171A),
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: const Color(0xFF232329)),
-      ),
+  Widget _buildTodayCard() {
+    return _glassCard(
+      margin: const EdgeInsets.only(top: 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Progress',
-            style: TextStyle(
-              color: Color(0xFFF5F5F5),
-              fontSize: 28,
-              fontWeight: FontWeight.w800,
-              height: 1.1,
-            ),
+          _SectionHeader(
+            title: 'Today',
+            subtitle: _totalToday == 0
+                ? 'No scheduled execution data.'
+                : '${_plural(_doneToday, 'done')} of ${_plural(_totalToday, 'commitment')}',
           ),
-          const SizedBox(height: 10),
-          const Text(
-            'Track consistency, recoverability, and the discipline you are building over time.',
-            style: TextStyle(
-              color: Color(0xFFB3B3BB),
-              height: 1.45,
-              fontSize: 14,
-            ),
+          const SizedBox(height: 16),
+          _BigProgressBar(
+            value: _todayCompletionRate,
+            label: 'Completion',
+            trailing: '$_doneToday / $_totalToday',
+          ),
+          const SizedBox(height: 12),
+          _BigProgressBar(
+            value: _todayRecoverabilityRate,
+            label: 'Still recoverable',
+            trailing: '${(_todayRecoverabilityRate * 100).round()}%',
           ),
           const SizedBox(height: 18),
           Row(
             children: [
               Expanded(
-                child: _buildMetricChip(
-                  label: 'Current Streak',
-                  value: '$_currentStreak',
+                child: _StatusPill(
+                  label: 'Now',
+                  value: '$_availableNowToday',
+                  icon: Icons.play_arrow_rounded,
                 ),
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: _buildMetricChip(
-                  label: 'All-Time Done',
-                  value: '$_totalDoneAllTime',
+                child: _StatusPill(
+                  label: 'Later',
+                  value: '$_upcomingToday',
+                  icon: Icons.schedule_rounded,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _StatusPill(
+                  label: 'Missed',
+                  value: '$_missedToday',
+                  icon: Icons.close_rounded,
                 ),
               ),
             ],
@@ -450,170 +559,105 @@ class _ProgressScreenState extends State<ProgressScreen> {
     );
   }
 
-  Widget _buildProgressBar({
-    required String title,
-    required String subtitle,
-    required double value,
-    required String trailingText,
-  }) {
-    return Container(
-      margin: const EdgeInsets.only(top: 14),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFF17171A),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFF232329)),
-      ),
+  Widget _buildWeekCard() {
+    return _glassCard(
+      margin: const EdgeInsets.only(top: 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _buildSectionTitle(title, subtitle: subtitle),
+          _SectionHeader(
+            title: 'This week',
+            subtitle: _totalThisWeek == 0
+                ? 'No weekly commitments recorded.'
+                : '${_plural(_doneThisWeek, 'complete')} across ${_plural(_totalThisWeek, 'scheduled item')}',
+          ),
+          const SizedBox(height: 16),
           Row(
             children: [
               Expanded(
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(999),
-                  child: LinearProgressIndicator(
-                    value: value.clamp(0, 1),
-                    minHeight: 10,
-                    backgroundColor: const Color(0xFF101013),
-                    valueColor: const AlwaysStoppedAnimation<Color>(
-                      Color(0xFFF5F5F5),
-                    ),
-                  ),
+                child: _WeekNumber(
+                  value: '$_doneThisWeek',
+                  label: 'Done',
                 ),
               ),
-              const SizedBox(width: 12),
-              Text(
-                trailingText,
-                style: const TextStyle(
-                  color: Color(0xFFF5F5F5),
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
+              const SizedBox(width: 10),
+              Expanded(
+                child: _WeekNumber(
+                  value: '$_remainingThisWeek',
+                  label: 'Recoverable',
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _WeekNumber(
+                  value: '$_missedThisWeek',
+                  label: 'Missed',
                 ),
               ),
             ],
           ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildDayStatusCard() {
-    String headline;
-    String body;
-
-    if (_totalToday == 0) {
-      headline = 'No commitments today';
-      body = 'There are no scheduled tasks to execute today.';
-    } else if (_availableNowToday > 0) {
-      headline = 'Today is recoverable now';
-      body =
-          'You currently have $_availableNowToday task${_availableNowToday == 1 ? '' : 's'} available to execute right now.';
-    } else if (_doneToday > 0 && _upcomingToday > 0) {
-      headline = 'Momentum is active';
-      body =
-          'You have already completed $_doneToday task${_doneToday == 1 ? '' : 's'}, and $_upcomingToday more ${_upcomingToday == 1 ? 'is' : 'are'} still coming later.';
-    } else if (_upcomingToday > 0) {
-      headline = 'Later commitments remain';
-      body =
-          'Nothing is open right now, but $_upcomingToday task${_upcomingToday == 1 ? '' : 's'} ${_upcomingToday == 1 ? 'is' : 'are'} still scheduled for later today.';
-    } else if (_missedToday > 0) {
-      headline = 'Today has execution loss';
-      body =
-          '$_missedToday task${_missedToday == 1 ? '' : 's'} ${_missedToday == 1 ? 'has' : 'have'} already missed its completion window.';
-    } else {
-      headline = 'Today is stable';
-      body = 'Your current day is under control.';
-    }
-
-    return Container(
-      margin: const EdgeInsets.only(top: 14),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFF17171A),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFF232329)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _buildSectionTitle(
-            'Day status',
-            subtitle: 'What the current day still allows.',
+          const SizedBox(height: 18),
+          _BigProgressBar(
+            value: _weekCompletionRate,
+            label: 'Weekly completion',
+            trailing: '${(_weekCompletionRate * 100).round()}%',
           ),
-          Text(
-            headline,
-            style: const TextStyle(
-              color: Color(0xFFF5F5F5),
-              fontSize: 16,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            body,
-            style: const TextStyle(
-              color: Color(0xFFB3B3BB),
-              fontSize: 14,
-              height: 1.45,
-            ),
+          const SizedBox(height: 12),
+          _BigProgressBar(
+            value: _weekRecoverabilityRate,
+            label: 'Weekly recoverability',
+            trailing: '${(_weekRecoverabilityRate * 100).round()}%',
           ),
         ],
       ),
     );
   }
 
-  Widget _buildWeekStatusCard() {
-    String headline;
-    String body;
-
-    if (_totalThisWeek == 0) {
-      headline = 'No weekly commitments';
-      body = 'There are no scheduled tasks recorded for this week.';
-    } else if (_remainingThisWeek > 0) {
-      headline = 'The week is still recoverable';
-      body =
-          'You have completed $_doneThisWeek of $_totalThisWeek weekly commitments, and $_remainingThisWeek ${_remainingThisWeek == 1 ? 'still remains' : 'still remain'} recoverable.';
-    } else if (_missedThisWeek > 0) {
-      headline = 'This week has unrecovered losses';
-      body =
-          '$_missedThisWeek task${_missedThisWeek == 1 ? '' : 's'} ${_missedThisWeek == 1 ? 'was' : 'were'} missed this week, with no remaining weekly commitments left to offset them.';
-    } else {
-      headline = 'The week is under control';
-      body = 'Your weekly commitments are being handled cleanly so far.';
-    }
-
-    return Container(
-      margin: const EdgeInsets.only(top: 14),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFF17171A),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFF232329)),
-      ),
-      child: Column(
+  Widget _buildRecommendationCard() {
+    return _glassCard(
+      margin: const EdgeInsets.only(top: 16),
+      child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _buildSectionTitle(
-            'Week status',
-            subtitle: 'How much of the current week is still recoverable.',
-          ),
-          Text(
-            headline,
-            style: const TextStyle(
-              color: Color(0xFFF5F5F5),
-              fontSize: 16,
-              fontWeight: FontWeight.w700,
+          Container(
+            width: 46,
+            height: 46,
+            decoration: BoxDecoration(
+              color: const Color(0xFF202026),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: const Color(0xFF303038)),
+            ),
+            child: const Icon(
+              Icons.bolt_rounded,
+              color: Color(0xFFF8F8F8),
+              size: 25,
             ),
           ),
-          const SizedBox(height: 6),
-          Text(
-            body,
-            style: const TextStyle(
-              color: Color(0xFFB3B3BB),
-              fontSize: 14,
-              height: 1.45,
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Best next move',
+                  style: TextStyle(
+                    color: Color(0xFFF8F8F8),
+                    fontSize: 16,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: -0.2,
+                  ),
+                ),
+                const SizedBox(height: 7),
+                Text(
+                  _recommendation,
+                  style: const TextStyle(
+                    color: Color(0xFFA9A9B3),
+                    fontSize: 14,
+                    height: 1.45,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
             ),
           ),
         ],
@@ -621,178 +665,32 @@ class _ProgressScreenState extends State<ProgressScreen> {
     );
   }
 
-  Widget _buildSummaryGrid() {
-    final rows = <Widget>[];
-
-    if (_doneToday > 0 || _upcomingToday > 0) {
-      rows.add(
-        Row(
-          children: [
-            Expanded(
-              child: _buildMetricChip(
-                label: 'Done Today',
-                value: '$_doneToday',
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: _buildMetricChip(
-                label: 'Coming Later',
-                value: '$_upcomingToday',
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    if (_availableNowToday > 0 || _missedToday > 0) {
-      if (rows.isNotEmpty) rows.add(const SizedBox(height: 10));
-      rows.add(
-        Row(
-          children: [
-            Expanded(
-              child: _buildMetricChip(
-                label: 'Available Now',
-                value: '$_availableNowToday',
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: _buildMetricChip(
-                label: 'Missed Today',
-                value: '$_missedToday',
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    if (_doneThisWeek > 0 || _remainingThisWeek > 0) {
-      if (rows.isNotEmpty) rows.add(const SizedBox(height: 10));
-      rows.add(
-        Row(
-          children: [
-            Expanded(
-              child: _buildMetricChip(
-                label: 'Done This Week',
-                value: '$_doneThisWeek',
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: _buildMetricChip(
-                label: 'Recoverable Week',
-                value: '$_remainingThisWeek',
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    if (_missedThisWeek > 0 || _totalToday > 0) {
-      if (rows.isNotEmpty) rows.add(const SizedBox(height: 10));
-      rows.add(
-        Row(
-          children: [
-            Expanded(
-              child: _buildMetricChip(
-                label: 'Missed This Week',
-                value: '$_missedThisWeek',
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: _buildMetricChip(
-                label: 'Total Today',
-                value: '$_totalToday',
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    if (rows.isEmpty) {
-      rows.add(
-        const Text(
-          'No measurable execution data yet.',
-          style: TextStyle(
-            color: Color(0xFF9A9AA3),
-            fontSize: 14,
-          ),
-        ),
-      );
-    }
-
-    return Container(
-      margin: const EdgeInsets.only(top: 14),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFF17171A),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFF232329)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+  Widget _buildEmptyState() {
+    return _glassCard(
+      margin: const EdgeInsets.only(top: 16),
+      padding: const EdgeInsets.all(28),
+      child: const Column(
         children: [
-          _buildSectionTitle(
-            'Summary',
-            subtitle: 'A clearer breakdown of what is done and what is still ahead.',
+          Icon(
+            Icons.insights_rounded,
+            color: Color(0xFF777780),
+            size: 38,
           ),
-          const SizedBox(height: 4),
-          ...rows,
-        ],
-      ),
-    );
-  }
-
-  Widget _buildInsightCard() {
-    String message;
-
-    if (_currentStreak >= 7 && _availableNowToday > 0) {
-      message =
-          'You are building real momentum. Protect the streak by executing the next available commitment now.';
-    } else if (_availableNowToday > 0) {
-      message =
-          'You have habits available right now. Executing one will immediately improve today’s recovery picture.';
-    } else if (_doneToday > 0 && _upcomingToday > 0) {
-      message =
-          'You already made progress today, and more commitments are still scheduled ahead. Protect the rhythm.';
-    } else if (_upcomingToday > 0) {
-      message =
-          'More work is still coming later today. Stay ready for the next execution window.';
-    } else if (_missedToday > 0 && _remainingThisWeek > 0) {
-      message =
-          'Some of today has already slipped, but the week is still recoverable. Use the remaining commitments well.';
-    } else if (_doneToday > 0) {
-      message =
-          'Today already has momentum. Finish strong and protect consistency.';
-    } else {
-      message = 'No active tasks recorded for today yet.';
-    }
-
-    return Container(
-      margin: const EdgeInsets.only(top: 14),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFF17171A),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFF232329)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _buildSectionTitle(
-            'Discipline insight',
-            subtitle: 'A quick read on your current trajectory.',
-          ),
+          SizedBox(height: 14),
           Text(
-            message,
-            style: const TextStyle(
-              color: Color(0xFFB3B3BB),
+            'No progress data yet',
+            style: TextStyle(
+              color: Color(0xFFF8F8F8),
+              fontSize: 18,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          SizedBox(height: 8),
+          Text(
+            'Once you complete scheduled commitments, your streaks and execution patterns will appear here.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Color(0xFF9D9DA8),
               fontSize: 14,
               height: 1.45,
             ),
@@ -806,7 +704,7 @@ class _ProgressScreenState extends State<ProgressScreen> {
     if (_isLoading) {
       return const Center(
         child: CircularProgressIndicator(
-          color: Color(0xFFF5F5F5),
+          color: Color(0xFFF8F8F8),
         ),
       );
     }
@@ -819,12 +717,18 @@ class _ProgressScreenState extends State<ProgressScreen> {
             _error!,
             textAlign: TextAlign.center,
             style: const TextStyle(
-              color: Color(0xFFB3B3BB),
+              color: Color(0xFFB8B8C0),
+              height: 1.4,
             ),
           ),
         ),
       );
     }
+
+    final hasAnyData = _totalToday > 0 ||
+        _totalThisWeek > 0 ||
+        _totalDoneAllTime > 0 ||
+        _currentStreak > 0;
 
     return HoldToRefreshWrapper(
       onRefresh: _loadProgressData,
@@ -832,44 +736,17 @@ class _ProgressScreenState extends State<ProgressScreen> {
         physics: const BouncingScrollPhysics(
           parent: AlwaysScrollableScrollPhysics(),
         ),
-        padding: const EdgeInsets.fromLTRB(16, 18, 16, 28),
+        padding: const EdgeInsets.fromLTRB(18, 18, 18, 34),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _buildTopCard(),
-            const SizedBox(height: 18),
-            if (_hasSummaryContent) _buildSummaryGrid(),
-            _buildDayStatusCard(),
-            if (_hasTodayProgressBars) ...[
-              _buildProgressBar(
-                title: 'Today completion',
-                subtitle: 'Completed out of everything scheduled for today.',
-                value: _todayCompletionRate,
-                trailingText: '${(_todayCompletionRate * 100).round()}%',
-              ),
-              _buildProgressBar(
-                title: 'Today recoverability',
-                subtitle: 'Done plus still-recoverable work out of today’s total.',
-                value: _todayRecoverabilityRate,
-                trailingText: '${(_todayRecoverabilityRate * 100).round()}%',
-              ),
-            ],
-            _buildWeekStatusCard(),
-            if (_hasWeekProgressBars) ...[
-              _buildProgressBar(
-                title: 'Weekly completion',
-                subtitle: 'Completed out of everything scheduled for this week.',
-                value: _weekCompletionRate,
-                trailingText: '${(_weekCompletionRate * 100).round()}%',
-              ),
-              _buildProgressBar(
-                title: 'Weekly recoverability',
-                subtitle: 'Done plus remaining recoverable work for this week.',
-                value: _weekRecoverabilityRate,
-                trailingText: '${(_weekRecoverabilityRate * 100).round()}%',
-              ),
-            ],
-            _buildInsightCard(),
+            _buildHeroCard(),
+            if (hasAnyData) ...[
+              _buildTodayCard(),
+              _buildWeekCard(),
+              _buildRecommendationCard(),
+            ] else
+              _buildEmptyState(),
           ],
         ),
       ),
@@ -879,9 +756,378 @@ class _ProgressScreenState extends State<ProgressScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0B0B0C),
+      backgroundColor: const Color(0xFF09090B),
       body: SafeArea(
         child: _buildBody(),
+      ),
+    );
+  }
+}
+
+class _ProgressRing extends StatelessWidget {
+  const _ProgressRing({
+    required this.value,
+    required this.centerText,
+    required this.footerText,
+  });
+
+  final double value;
+  final String centerText;
+  final String footerText;
+
+  @override
+  Widget build(BuildContext context) {
+    final safeValue = value.clamp(0.0, 1.0);
+
+    return SizedBox(
+      width: 106,
+      height: 106,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          CustomPaint(
+            size: const Size(106, 106),
+            painter: _RingPainter(value: safeValue),
+          ),
+          Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                centerText,
+                style: const TextStyle(
+                  color: Color(0xFFF8F8F8),
+                  fontSize: 22,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: -0.6,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                footerText,
+                style: const TextStyle(
+                  color: Color(0xFF8C8C96),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RingPainter extends CustomPainter {
+  const _RingPainter({required this.value});
+
+  final double value;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = size.center(Offset.zero);
+    final radius = size.width / 2 - 7;
+
+    final trackPaint = Paint()
+      ..color = const Color(0xFF25252B)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 10
+      ..strokeCap = StrokeCap.round;
+
+    final progressPaint = Paint()
+      ..shader = const LinearGradient(
+        colors: [
+          Color(0xFFF8F8F8),
+          Color(0xFF9D9DA8),
+        ],
+      ).createShader(Rect.fromCircle(center: center, radius: radius))
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 10
+      ..strokeCap = StrokeCap.round;
+
+    canvas.drawCircle(center, radius, trackPaint);
+
+    final sweepAngle = 2 * math.pi * value;
+
+    canvas.drawArc(
+      Rect.fromCircle(center: center, radius: radius),
+      -math.pi / 2,
+      sweepAngle,
+      false,
+      progressPaint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _RingPainter oldDelegate) {
+    return oldDelegate.value != value;
+  }
+}
+
+class _HeroStat extends StatelessWidget {
+  const _HeroStat({
+    required this.value,
+    required this.label,
+    required this.icon,
+  });
+
+  final String value;
+  final String label;
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1D1D22),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFF2B2B32)),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            icon,
+            color: const Color(0xFFF8F8F8),
+            size: 21,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  value,
+                  style: const TextStyle(
+                    color: Color(0xFFF8F8F8),
+                    fontSize: 20,
+                    fontWeight: FontWeight.w900,
+                    height: 1,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xFF8C8C96),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SectionHeader extends StatelessWidget {
+  const _SectionHeader({
+    required this.title,
+    required this.subtitle,
+  });
+
+  final String title;
+  final String subtitle;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: const TextStyle(
+                  color: Color(0xFFF8F8F8),
+                  fontSize: 20,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: -0.4,
+                ),
+              ),
+              const SizedBox(height: 5),
+              Text(
+                subtitle,
+                style: const TextStyle(
+                  color: Color(0xFF8C8C96),
+                  fontSize: 13,
+                  height: 1.35,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _BigProgressBar extends StatelessWidget {
+  const _BigProgressBar({
+    required this.value,
+    required this.label,
+    required this.trailing,
+  });
+
+  final double value;
+  final String label;
+  final String trailing;
+
+  @override
+  Widget build(BuildContext context) {
+    final safeValue = value.clamp(0.0, 1.0);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                label,
+                style: const TextStyle(
+                  color: Color(0xFFA9A9B3),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+            Text(
+              trailing,
+              style: const TextStyle(
+                color: Color(0xFFF8F8F8),
+                fontSize: 13,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(999),
+          child: LinearProgressIndicator(
+            value: safeValue,
+            minHeight: 11,
+            backgroundColor: const Color(0xFF25252B),
+            valueColor: const AlwaysStoppedAnimation<Color>(
+              Color(0xFFF8F8F8),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _StatusPill extends StatelessWidget {
+  const _StatusPill({
+    required this.label,
+    required this.value,
+    required this.icon,
+  });
+
+  final String label;
+  final String value;
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: 12,
+        vertical: 13,
+      ),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1D1D22),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFF2B2B32)),
+      ),
+      child: Column(
+        children: [
+          Icon(
+            icon,
+            color: const Color(0xFFF8F8F8),
+            size: 20,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            value,
+            style: const TextStyle(
+              color: Color(0xFFF8F8F8),
+              fontSize: 18,
+              fontWeight: FontWeight.w900,
+              height: 1,
+            ),
+          ),
+          const SizedBox(height: 5),
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Color(0xFF8C8C96),
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _WeekNumber extends StatelessWidget {
+  const _WeekNumber({
+    required this.value,
+    required this.label,
+  });
+
+  final String value;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: 12,
+        vertical: 16,
+      ),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1D1D22),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFF2B2B32)),
+      ),
+      child: Column(
+        children: [
+          Text(
+            value,
+            style: const TextStyle(
+              color: Color(0xFFF8F8F8),
+              fontSize: 24,
+              fontWeight: FontWeight.w900,
+              letterSpacing: -0.5,
+              height: 1,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Color(0xFF8C8C96),
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
       ),
     );
   }

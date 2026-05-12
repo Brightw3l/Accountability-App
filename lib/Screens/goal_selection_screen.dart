@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../Widgets/primary_button.dart';
+import 'bright_onboarding_screen.dart';
 import 'goal_input_screen.dart';
 import 'providers.dart';
 
@@ -75,12 +76,11 @@ class _GoalSelectionScreenState extends ConsumerState<GoalSelectionScreen> {
           .eq('active', true)
           .order('created_at', ascending: true);
 
-      final goals =
-          List<Map<String, dynamic>>.from(goalTemplatesResponse);
-      final habits =
-          List<Map<String, dynamic>>.from(habitTemplatesResponse);
+      final goals = List<Map<String, dynamic>>.from(goalTemplatesResponse);
+      final habits = List<Map<String, dynamic>>.from(habitTemplatesResponse);
 
       final Map<String, List<Map<String, dynamic>>> groupedHabits = {};
+
       for (final goal in goals) {
         final goalTemplateId = goal['goal_template_id'].toString();
         final goalCode = goal['code'].toString();
@@ -113,6 +113,24 @@ class _GoalSelectionScreenState extends ConsumerState<GoalSelectionScreen> {
         _isLoading = false;
       });
     }
+  }
+
+  void _openBrightOnboarding() {
+    final user = supabase.auth.currentUser;
+
+    if (user == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('User not authenticated.')),
+      );
+      return;
+    }
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => BrightOnboardingScreen(userId: user.id),
+      ),
+    );
   }
 
   Future<void> _saveGoalsAndNavigate(
@@ -157,6 +175,7 @@ class _GoalSelectionScreenState extends ConsumerState<GoalSelectionScreen> {
               'why': null,
               'success_metric': null,
               'active': true,
+              'source': 'template',
             },
           )
           .toList();
@@ -184,9 +203,11 @@ class _GoalSelectionScreenState extends ConsumerState<GoalSelectionScreen> {
         if (goalId == null || goalId.isEmpty) {
           throw Exception('Inserted goal is missing goal_id.');
         }
+
         if (goalTemplateId == null || goalTemplateId.isEmpty) {
           throw Exception('Inserted goal is missing goal_template_id.');
         }
+
         if (goalTitle == null || goalTitle.isEmpty) {
           throw Exception('Inserted goal is missing title.');
         }
@@ -198,6 +219,7 @@ class _GoalSelectionScreenState extends ConsumerState<GoalSelectionScreen> {
         );
 
         final goalCode = matchingTemplate['code']?.toString();
+
         if (goalCode == null || goalCode.isEmpty) {
           throw Exception('Could not resolve selected goal code.');
         }
@@ -230,6 +252,7 @@ class _GoalSelectionScreenState extends ConsumerState<GoalSelectionScreen> {
             'tier_weight': habitTemplate['tier_weight'],
             'verification_locked': true,
             'active': true,
+            'source': 'template',
           });
         }
       }
@@ -256,7 +279,9 @@ class _GoalSelectionScreenState extends ConsumerState<GoalSelectionScreen> {
       );
     } on PostgrestException catch (e) {
       debugPrint('Postgrest error saving selected goals: ${e.message}');
+
       if (!mounted) return;
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Database error: ${e.message}')),
       );
@@ -290,6 +315,374 @@ class _GoalSelectionScreenState extends ConsumerState<GoalSelectionScreen> {
     return grouped;
   }
 
+  int get _totalHabitCount {
+    return _habitTemplatesByGoalCode.values.fold<int>(
+      0,
+      (total, habits) => total + habits.length,
+    );
+  }
+
+  Widget _screenShell({
+    required Widget child,
+  }) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF09090B),
+      body: SafeArea(child: child),
+    );
+  }
+
+  Widget _buildLoadingState() {
+    return _screenShell(
+      child: const Center(
+        child: CircularProgressIndicator(
+          color: Color(0xFFF8F8F8),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildErrorState() {
+    return _screenShell(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Center(
+          child: Container(
+            padding: const EdgeInsets.all(22),
+            decoration: BoxDecoration(
+              color: const Color(0xFF151519),
+              borderRadius: BorderRadius.circular(26),
+              border: Border.all(color: const Color(0xFF292930)),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(
+                  Icons.error_outline_rounded,
+                  color: Color(0xFFF8F8F8),
+                  size: 34,
+                ),
+                const SizedBox(height: 14),
+                const Text(
+                  'Could not load goals',
+                  style: TextStyle(
+                    color: Color(0xFFF8F8F8),
+                    fontSize: 19,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  _error ?? 'Something went wrong.',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Color(0xFFB8B8C0),
+                    height: 1.4,
+                  ),
+                ),
+                const SizedBox(height: 18),
+                ElevatedButton(
+                  onPressed: _loadTemplates,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFF8F8F8),
+                    foregroundColor: Colors.black,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                  ),
+                  child: const Text(
+                    'Try Again',
+                    style: TextStyle(fontWeight: FontWeight.w900),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHeader(int selectedCount) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+      padding: const EdgeInsets.all(22),
+      decoration: BoxDecoration(
+        color: const Color(0xFF151519),
+        borderRadius: BorderRadius.circular(30),
+        border: Border.all(color: const Color(0xFF292930)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.24),
+            blurRadius: 28,
+            offset: const Offset(0, 16),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Choose your focus',
+            style: TextStyle(
+              color: Color(0xFFF8F8F8),
+              fontSize: 31,
+              fontWeight: FontWeight.w900,
+              letterSpacing: -0.9,
+              height: 1,
+            ),
+          ),
+          const SizedBox(height: 10),
+          const Text(
+            'Pick two areas manually, or let BRIGHT build a custom setup if none of these match what you need.',
+            style: TextStyle(
+              color: Color(0xFFA9A9B3),
+              fontSize: 14,
+              height: 1.45,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 18),
+          Row(
+            children: [
+              Expanded(
+                child: _headerMetric(
+                  value: '$selectedCount/${GoalSelectionScreen.maxGoals}',
+                  label: 'selected',
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _headerMetric(
+                  value: '${_goalTemplates.length}',
+                  label: 'goal options',
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _headerMetric(
+                  value: '$_totalHabitCount',
+                  label: 'habit templates',
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _headerMetric({
+    required String value,
+    required String label,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1D1D22),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFF2B2B32)),
+      ),
+      child: Column(
+        children: [
+          Text(
+            value,
+            style: const TextStyle(
+              color: Color(0xFFF8F8F8),
+              fontSize: 18,
+              fontWeight: FontWeight.w900,
+              height: 1,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Color(0xFF8C8C96),
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBrightEntryCard() {
+    return GestureDetector(
+      onTap: _openBrightOnboarding,
+      child: Container(
+        margin: const EdgeInsets.fromLTRB(18, 0, 18, 18),
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              Color(0xFF22222A),
+              Color(0xFF151519),
+            ],
+          ),
+          borderRadius: BorderRadius.circular(28),
+          border: Border.all(color: const Color(0xFF363640)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.24),
+              blurRadius: 28,
+              offset: const Offset(0, 16),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 54,
+              height: 54,
+              decoration: BoxDecoration(
+                color: const Color(0xFFF8F8F8),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: const Icon(
+                Icons.auto_awesome_rounded,
+                color: Colors.black,
+                size: 26,
+              ),
+            ),
+            const SizedBox(width: 15),
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Not seeing your goal?',
+                    style: TextStyle(
+                      color: Color(0xFFF8F8F8),
+                      fontSize: 17,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: -0.3,
+                    ),
+                  ),
+                  SizedBox(height: 6),
+                  Text(
+                    'Let BRIGHT design a custom goal and habit system for you.',
+                    style: TextStyle(
+                      color: Color(0xFFA9A9B3),
+                      fontSize: 13,
+                      height: 1.35,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: const Color(0xFF2A2A31),
+                borderRadius: BorderRadius.circular(13),
+                border: Border.all(color: const Color(0xFF3A3A44)),
+              ),
+              child: const Icon(
+                Icons.chevron_right_rounded,
+                color: Color(0xFFF8F8F8),
+                size: 22,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCategorySection({
+    required String category,
+    required List<Map<String, dynamic>> goals,
+    required Set<String> selectedGoals,
+    required dynamic selectedNotifier,
+  }) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(18, 0, 18, 18),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF151519),
+        borderRadius: BorderRadius.circular(28),
+        border: Border.all(color: const Color(0xFF292930)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.folder_rounded,
+                color: Color(0xFFF8F8F8),
+                size: 19,
+              ),
+              const SizedBox(width: 9),
+              Expanded(
+                child: Text(
+                  category,
+                  style: const TextStyle(
+                    color: Color(0xFFF8F8F8),
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: -0.3,
+                  ),
+                ),
+              ),
+              Text(
+                '${goals.length}',
+                style: const TextStyle(
+                  color: Color(0xFF8C8C96),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final bool compact = constraints.maxWidth < 380;
+
+              return GridView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: goals.length,
+                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: compact ? 1 : 2,
+                  crossAxisSpacing: 10,
+                  mainAxisSpacing: 10,
+                  childAspectRatio: compact ? 2.45 : 1.14,
+                ),
+                itemBuilder: (_, index) {
+                  final goal = goals[index];
+                  final code = (goal['code'] ?? '').toString();
+                  final isSelected = selectedGoals.contains(code);
+
+                  return _buildGoalCard(
+                    goal: goal,
+                    isSelected: isSelected,
+                    onTap: () {
+                      selectedNotifier.toggle(
+                        code,
+                        maxGoals: GoalSelectionScreen.maxGoals,
+                      );
+                    },
+                  );
+                },
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildGoalCard({
     required Map<String, dynamic> goal,
     required bool isSelected,
@@ -298,62 +691,167 @@ class _GoalSelectionScreenState extends ConsumerState<GoalSelectionScreen> {
     final goalCode = (goal['code'] ?? '').toString();
     final habitCount = (_habitTemplatesByGoalCode[goalCode] ?? []).length;
     final description = (goal['description'] ?? '').toString();
+    final title = (goal['title'] ?? 'Untitled Goal').toString();
 
     return GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOut,
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
           color: isSelected
-              ? const Color(0xFFF5F5F5)
-              : const Color(0xFF17171A),
-          borderRadius: BorderRadius.circular(16),
+              ? const Color(0xFFF8F8F8)
+              : const Color(0xFF1D1D22),
+          borderRadius: BorderRadius.circular(22),
           border: Border.all(
             color: isSelected
-                ? const Color(0xFFF5F5F5)
-                : const Color(0xFF2A2A2F),
+                ? const Color(0xFFF8F8F8)
+                : const Color(0xFF2B2B32),
+            width: isSelected ? 1.4 : 1,
           ),
+          boxShadow: isSelected
+              ? [
+                  BoxShadow(
+                    color: Colors.white.withValues(alpha: 0.08),
+                    blurRadius: 18,
+                    offset: const Offset(0, 10),
+                  ),
+                ]
+              : null,
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        child: Stack(
           children: [
-            Text(
-              (goal['title'] ?? 'Untitled Goal').toString(),
-              style: TextStyle(
-                color: isSelected ? Colors.black : const Color(0xFFF5F5F5),
-                fontSize: 15,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              '$habitCount habits',
-              style: TextStyle(
-                color: isSelected
-                    ? Colors.black.withValues(alpha: 0.65)
-                    : const Color(0xFF9A9AA3),
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            if (description.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Text(
-                description,
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: isSelected
-                      ? Colors.black.withValues(alpha: 0.75)
-                      : const Color(0xFFB3B3BB),
-                  fontSize: 12,
-                  height: 1.35,
+            Positioned(
+              top: 0,
+              right: 0,
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                width: 25,
+                height: 25,
+                decoration: BoxDecoration(
+                  color: isSelected ? Colors.black : const Color(0xFF26262D),
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: isSelected
+                        ? Colors.black
+                        : const Color(0xFF3A3A42),
+                  ),
+                ),
+                child: Icon(
+                  isSelected ? Icons.check_rounded : Icons.add_rounded,
+                  size: 16,
+                  color: isSelected ? Colors.white : const Color(0xFF8C8C96),
                 ),
               ),
-            ],
+            ),
+            Padding(
+              padding: const EdgeInsets.only(right: 30),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color:
+                          isSelected ? Colors.black : const Color(0xFFF8F8F8),
+                      fontSize: 15,
+                      height: 1.15,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: -0.2,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 9,
+                      vertical: 5,
+                    ),
+                    decoration: BoxDecoration(
+                      color: isSelected
+                          ? Colors.black.withValues(alpha: 0.08)
+                          : const Color(0xFF25252B),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      '$habitCount habit${habitCount == 1 ? '' : 's'}',
+                      style: TextStyle(
+                        color: isSelected
+                            ? Colors.black.withValues(alpha: 0.72)
+                            : const Color(0xFFA9A9B3),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  if (description.isNotEmpty) ...[
+                    const SizedBox(height: 9),
+                    Expanded(
+                      child: Text(
+                        description,
+                        maxLines: 4,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: isSelected
+                              ? Colors.black.withValues(alpha: 0.72)
+                              : const Color(0xFF9D9DA8),
+                          fontSize: 12,
+                          height: 1.32,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ] else
+                    const Spacer(),
+                ],
+              ),
+            ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildBottomBar({
+    required bool canContinue,
+    required int selectedCount,
+    required Set<String> selectedGoals,
+  }) {
+    final int remaining = GoalSelectionScreen.maxGoals - selectedCount;
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(18, 12, 18, 18),
+      decoration: BoxDecoration(
+        color: const Color(0xFF09090B),
+        border: Border(
+          top: BorderSide(
+            color: const Color(0xFF292930).withValues(alpha: 0.8),
+          ),
+        ),
+      ),
+      child: SafeArea(
+        top: false,
+        child: _isSaving
+            ? const Center(
+                child: CircularProgressIndicator(
+                  color: Color(0xFFF8F8F8),
+                ),
+              )
+            : PrimaryButton(
+                text: canContinue
+                    ? 'Continue With Selected Goals'
+                    : remaining == 1
+                        ? 'Select 1 more goal'
+                        : 'Select $remaining more goals',
+                onPressed: canContinue
+                    ? () => _saveGoalsAndNavigate(
+                          context,
+                          selectedGoals,
+                        )
+                    : null,
+              ),
       ),
     );
   }
@@ -363,139 +861,47 @@ class _GoalSelectionScreenState extends ConsumerState<GoalSelectionScreen> {
     final selectedGoals = ref.watch(selectedGoalsProvider);
     final selectedNotifier = ref.read(selectedGoalsProvider.notifier);
 
-    final canContinue =
-        selectedGoals.length == GoalSelectionScreen.maxGoals;
-
+    final canContinue = selectedGoals.length == GoalSelectionScreen.maxGoals;
     final groupedGoals = _groupGoalsByCategory();
 
     if (_isLoading) {
-      return const Scaffold(
-        backgroundColor: Color(0xFF0F0F0F),
-        body: Center(child: CircularProgressIndicator()),
-      );
+      return _buildLoadingState();
     }
 
     if (_error != null) {
-      return Scaffold(
-        backgroundColor: const Color(0xFF0F0F0F),
-        appBar: AppBar(
-          backgroundColor: const Color(0xFF0F0F0F),
-          elevation: 0,
-          title: const Text(
-            'Select Your Focus Areas',
-            style: TextStyle(color: Color(0xFFF5F5F5)),
-          ),
-        ),
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Text(
-              _error!,
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: Color(0xFFB3B3BB)),
-            ),
-          ),
-        ),
-      );
+      return _buildErrorState();
     }
 
     return Scaffold(
-      backgroundColor: const Color(0xFF0F0F0F),
-      appBar: AppBar(
-        backgroundColor: const Color(0xFF0F0F0F),
-        elevation: 0,
-        title: const Text(
-          'Select Your Focus Areas',
-          style: TextStyle(color: Color(0xFFF5F5F5)),
-        ),
-      ),
-      body: Column(
-        children: [
-          const SizedBox(height: 10),
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 20),
-            child: Text(
-              'Choose exactly 2 broad goals.\nYou will define them in detail next.',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: Color(0xFFAAAAAA),
-                height: 1.5,
+      backgroundColor: const Color(0xFF09090B),
+      body: SafeArea(
+        child: Column(
+          children: [
+            Expanded(
+              child: ListView(
+                physics: const BouncingScrollPhysics(),
+                children: [
+                  _buildHeader(selectedGoals.length),
+                  _buildBrightEntryCard(),
+                  ...groupedGoals.entries.map(
+                    (entry) => _buildCategorySection(
+                      category: entry.key,
+                      goals: entry.value,
+                      selectedGoals: selectedGoals,
+                      selectedNotifier: selectedNotifier,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                ],
               ),
             ),
-          ),
-          const SizedBox(height: 20),
-          Expanded(
-            child: ListView(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              children: groupedGoals.entries.map((entry) {
-                final category = entry.key;
-                final goals = entry.value;
-
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 28),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        category,
-                        style: const TextStyle(
-                          color: Color(0xFFF5F5F5),
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(height: 14),
-                      GridView.builder(
-                        shrinkWrap: true,
-                        physics: const NeverScrollableScrollPhysics(),
-                        itemCount: goals.length,
-                        gridDelegate:
-                            const SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: 2,
-                          crossAxisSpacing: 10,
-                          mainAxisSpacing: 10,
-                          childAspectRatio: 1.3,
-                        ),
-                        itemBuilder: (_, index) {
-                          final goal = goals[index];
-                          final code = (goal['code'] ?? '').toString();
-                          final isSelected = selectedGoals.contains(code);
-
-                          return _buildGoalCard(
-                            goal: goal,
-                            isSelected: isSelected,
-                            onTap: () {
-                              selectedNotifier.toggle(
-                                code,
-                                maxGoals: GoalSelectionScreen.maxGoals,
-                              );
-                            },
-                          );
-                        },
-                      ),
-                    ],
-                  ),
-                );
-              }).toList(),
+            _buildBottomBar(
+              canContinue: canContinue,
+              selectedCount: selectedGoals.length,
+              selectedGoals: selectedGoals,
             ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(20),
-            child: _isSaving
-                ? const Center(child: CircularProgressIndicator())
-                : PrimaryButton(
-                    text: canContinue
-                        ? 'Continue'
-                        : 'Select ${GoalSelectionScreen.maxGoals - selectedGoals.length} more',
-                    onPressed: canContinue
-                        ? () => _saveGoalsAndNavigate(
-                              context,
-                              selectedGoals,
-                            )
-                        : null,
-                  ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
