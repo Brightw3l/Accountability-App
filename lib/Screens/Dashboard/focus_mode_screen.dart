@@ -1,0 +1,1128 @@
+// ignore_for_file: deprecated_member_use, use_build_context_synchronously
+
+import 'dart:async';
+import 'dart:io';
+
+import 'package:achievr_app/Providers/focus_runtime_controller_provider.dart';
+import 'package:achievr_app/Screens/Social/verification_settings_screen.dart';
+import 'package:achievr_app/Services/app_clock.dart';
+import 'package:achievr_app/Services/badge_service.dart';
+import 'package:achievr_app/Services/focus_engine_models.dart';
+import 'package:achievr_app/Services/habit_location_service.dart';
+import 'package:achievr_app/Services/location_runtime_service.dart';
+import 'package:achievr_app/Services/points_service.dart';
+import 'package:achievr_app/Widgets/points_feedback.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+
+class FocusModeScreen extends ConsumerStatefulWidget {
+  final Map<String, dynamic> log;
+
+  const FocusModeScreen({
+    super.key,
+    required this.log,
+  });
+
+  @override
+  ConsumerState<FocusModeScreen> createState() => _FocusModeScreenState();
+}
+
+class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
+  final HabitLocationService _habitLocationService = HabitLocationService();
+  final LocationRuntimeService _locationRuntimeService =
+      LocationRuntimeService();
+  final PointsService _pointsService = PointsService();
+  final BadgeService _badgeService = BadgeService();
+
+  bool _isStarting = false;
+  bool _isCompleting = false;
+  bool _isAbandoning = false;
+  bool _isPreparingLocation = false;
+
+  String? _lastHandledPenaltyStatus;
+  bool _isApplyingAutoFailurePenalty = false;
+
+  Timer? _uiClockTimer;
+
+  bool get _supportsNativeFocusRuntime => !kIsWeb && Platform.isAndroid;
+
+  @override
+  void initState() {
+    super.initState();
+
+    AppClock.debugNowNotifier.addListener(_handleClockChange);
+
+    _uiClockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      setState(() {});
+    });
+
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final controller = ref.read(focusRuntimeControllerProvider);
+      final requestedLogId = widget.log['log_id']?.toString();
+
+      if (controller.isSameActiveLog(requestedLogId)) {
+        return;
+      }
+
+      await controller.attachToLog(widget.log);
+    });
+  }
+
+  @override
+  void dispose() {
+    AppClock.debugNowNotifier.removeListener(_handleClockChange);
+    _uiClockTimer?.cancel();
+    super.dispose();
+  }
+
+  void _handleClockChange() {
+    if (!mounted) return;
+    setState(() {});
+  }
+
+  String? get _logId => widget.log['log_id']?.toString();
+
+  String? get _habitId {
+    final nestedHabit = widget.log['habits'];
+    if (nestedHabit is Map<String, dynamic>) {
+      return nestedHabit['habit_id']?.toString();
+    }
+    if (nestedHabit is Map) {
+      return nestedHabit['habit_id']?.toString();
+    }
+    return widget.log['habit_id']?.toString();
+  }
+
+  String get _habitTitle {
+    final nestedHabit = widget.log['habits'];
+    if (nestedHabit is Map<String, dynamic>) {
+      return (nestedHabit['title'] ?? 'Focus task').toString();
+    }
+    if (nestedHabit is Map) {
+      return (nestedHabit['title'] ?? 'Focus task').toString();
+    }
+    return (widget.log['habit_title'] ?? 'Focus task').toString();
+  }
+
+  String get _goalTitle {
+    final nestedHabit = widget.log['habits'];
+    if (nestedHabit is Map<String, dynamic>) {
+      final nestedGoal = nestedHabit['goals'];
+      if (nestedGoal is Map<String, dynamic>) {
+        return (nestedGoal['title'] ?? 'Goal').toString();
+      }
+      if (nestedGoal is Map) {
+        return (nestedGoal['title'] ?? 'Goal').toString();
+      }
+    }
+    return (widget.log['goal_title'] ?? 'Goal').toString();
+  }
+
+  DateTime? get _windowStart {
+    final logDate = DateTime.tryParse(widget.log['log_date']?.toString() ?? '');
+    final rawTime = widget.log['scheduled_start']?.toString();
+
+    if (logDate == null || rawTime == null || rawTime.isEmpty) return null;
+
+    final parts = rawTime.split(':');
+    if (parts.length < 2) return null;
+
+    final hour = int.tryParse(parts[0]);
+    final minute = int.tryParse(parts[1]);
+    final second = parts.length > 2 ? int.tryParse(parts[2]) ?? 0 : 0;
+
+    if (hour == null || minute == null) return null;
+
+    return DateTime(
+      logDate.year,
+      logDate.month,
+      logDate.day,
+      hour,
+      minute,
+      second,
+    );
+  }
+
+  DateTime? get _windowEnd {
+    final logDate = DateTime.tryParse(widget.log['log_date']?.toString() ?? '');
+    final rawTime = widget.log['scheduled_end']?.toString();
+
+    if (logDate == null || rawTime == null || rawTime.isEmpty) return null;
+
+    final parts = rawTime.split(':');
+    if (parts.length < 2) return null;
+
+    final hour = int.tryParse(parts[0]);
+    final minute = int.tryParse(parts[1]);
+    final second = parts.length > 2 ? int.tryParse(parts[2]) ?? 0 : 0;
+
+    if (hour == null || minute == null) return null;
+
+    return DateTime(
+      logDate.year,
+      logDate.month,
+      logDate.day,
+      hour,
+      minute,
+      second,
+    );
+  }
+
+  bool get _isWithinExecutionWindow {
+    final start = _windowStart;
+    final end = _windowEnd;
+    final now = AppClock.now();
+
+    if (start == null || end == null) return true;
+    return !now.isBefore(start) && !now.isAfter(end);
+  }
+
+  String get _executionWindowMessage {
+    final start = _windowStart;
+    final end = _windowEnd;
+    final now = AppClock.now();
+
+    if (start != null && now.isBefore(start)) {
+      return 'This task cannot start until ${_formatClockTime(start)}.';
+    }
+
+    if (end != null && now.isAfter(end)) {
+      return 'This task is already outside its execution window.';
+    }
+
+    return 'This task is outside its execution window.';
+  }
+
+  int _habitBasePoints(Map<String, dynamic>? habit) {
+    final raw = habit?['base_points'];
+    if (raw is int) return raw;
+    if (raw is double) return raw.round();
+    return int.tryParse('${raw ?? ''}') ?? 0;
+  }
+
+  int _habitPenaltyPoints(Map<String, dynamic>? habit) {
+    final raw = habit?['penalty_points'];
+    if (raw is int) return raw;
+    if (raw is double) return raw.round();
+    return int.tryParse('${raw ?? ''}') ?? 0;
+  }
+
+  String _habitVerificationType(Map<String, dynamic>? habit) {
+    return (habit?['verification_type'] ?? 'focus_auto').toString();
+  }
+
+  Future<void> _refreshController() async {
+    final controller = ref.read(focusRuntimeControllerProvider);
+    final requestedLogId = widget.log['log_id']?.toString();
+
+    if (controller.isSameActiveLog(requestedLogId)) {
+      return;
+    }
+
+    await controller.attachToLog(widget.log);
+  }
+
+  Future<void> _requestLocationAccess() async {
+    try {
+      setState(() {
+        _isPreparingLocation = true;
+      });
+
+      final enabled = await _locationRuntimeService.isServiceEnabled();
+      if (!enabled) {
+        throw Exception('Location services are disabled.');
+      }
+
+      var permission = await _locationRuntimeService.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await _locationRuntimeService.requestPermission();
+      }
+
+      if (permission == LocationPermission.denied) {
+        throw Exception('Location permission denied.');
+      }
+
+      if (permission == LocationPermission.deniedForever) {
+        throw Exception('Location permission denied forever. Open app settings.');
+      }
+
+      await _refreshController();
+    } catch (e) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not prepare location: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isPreparingLocation = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _openVerificationSettings() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const VerificationSettingsScreen(),
+      ),
+    );
+
+    if (!mounted) return;
+    await _refreshController();
+  }
+
+  Future<bool> _ensureLocationConfigExists(bool needsLocation) async {
+    final habitId = _habitId;
+    if (!needsLocation) return true;
+    if (habitId == null) return false;
+
+    final config = await _habitLocationService.fetchHabitLocationConfig(
+      habitId: habitId,
+    );
+
+    if (config != null) {
+      return true;
+    }
+
+    if (!mounted) return false;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('This habit needs location setup before focus can start.'),
+      ),
+    );
+
+    return false;
+  }
+
+  Future<void> _startFocus() async {
+    final logId = _logId;
+    final habitId = _habitId;
+    final controller = ref.read(focusRuntimeControllerProvider);
+    final runtimeState = controller.state;
+    final habit = runtimeState.habit;
+    final verificationType = (habit?['verification_type'] ?? '').toString();
+    final needsLocation = verificationType.contains('location');
+
+    if (logId == null || habitId == null) return;
+
+    try {
+      setState(() {
+        _isStarting = true;
+      });
+
+      if (!_supportsNativeFocusRuntime) {
+        throw Exception(
+          'Live Focus Mode works on Android phones and Android emulators only.',
+        );
+      }
+
+      if (runtimeState.hasLiveSession) {
+        throw Exception('This task already has an active focus session.');
+      }
+
+      if (!_isWithinExecutionWindow) {
+        throw Exception(_executionWindowMessage);
+      }
+
+      final hasPinnedLocation = await _ensureLocationConfigExists(needsLocation);
+      if (!hasPinnedLocation) {
+        throw Exception('This habit needs location setup first.');
+      }
+
+      if (!runtimeState.usageAccessReady) {
+        throw Exception('Usage access is required for focus mode.');
+      }
+
+      _lastHandledPenaltyStatus = null;
+
+      await controller.startSessionForAttachedLog();
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Focus session started.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not start focus: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isStarting = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _completeFocus() async {
+    final controller = ref.read(focusRuntimeControllerProvider);
+    final runtimeState = controller.state;
+    final user = Supabase.instance.client.auth.currentUser;
+
+    final logId = runtimeState.logId ?? _logId;
+    final habitId = runtimeState.habitId ?? _habitId;
+    final habit = runtimeState.habit;
+
+    if (user == null) return;
+    if (logId == null || logId.isEmpty) return;
+    if (habitId == null || habitId.isEmpty) return;
+
+    try {
+      setState(() {
+        _isCompleting = true;
+      });
+
+      await controller.completeSession();
+
+      final engineState = controller.state.engineState;
+      final thresholdMet = engineState?.thresholdMet ?? false;
+      final phase = controller.state.phaseLabel;
+
+      if (thresholdMet) {
+        final basePoints = _habitBasePoints(habit);
+        final verificationType = _habitVerificationType(habit);
+
+        await _pointsService.applyCompletionPoints(
+          userId: user.id,
+          logId: logId,
+          habitId: habitId,
+          basePoints: basePoints,
+          verificationType: verificationType,
+        );
+
+        await _badgeService.evaluateAndAwardCoreBadges(userId: user.id);
+
+        final awarded = _pointsService.calculateCompletionAward(
+          basePoints: basePoints,
+          verificationType: verificationType,
+        );
+
+        if (!mounted) return;
+
+        PointsDeltaOverlay.show(context, delta: awarded);
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Focus session completed. +$awarded points'),
+          ),
+        );
+        return;
+      }
+
+      final finalSession = controller.state.session;
+      final finalStatus = (finalSession?['status'] ?? '').toString();
+
+      if (finalStatus == 'failed') {
+        final penaltyPoints = _habitPenaltyPoints(habit);
+
+        await _pointsService.applyPenaltyPoints(
+          userId: user.id,
+          logId: logId,
+          habitId: habitId,
+          penaltyPoints: penaltyPoints,
+          penaltyReason: 'failed',
+        );
+
+        await _badgeService.evaluateAndAwardCoreBadges(userId: user.id);
+
+        _lastHandledPenaltyStatus = 'failed';
+
+        final penaltyDelta = _pointsService.calculatePenalty(
+          penaltyPoints: penaltyPoints,
+          penaltyReason: 'failed',
+        );
+
+        if (!mounted) return;
+
+        PointsDeltaOverlay.show(context, delta: penaltyDelta);
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Focus session failed. -${penaltyDelta.abs()} points'),
+          ),
+        );
+        return;
+      }
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Focus session ended, but threshold was not met ($phase).',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not complete focus: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isCompleting = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _abandonFocus() async {
+    final controller = ref.read(focusRuntimeControllerProvider);
+    final runtimeState = controller.state;
+    final user = Supabase.instance.client.auth.currentUser;
+
+    final logId = runtimeState.logId ?? _logId;
+    final habitId = runtimeState.habitId ?? _habitId;
+    final habit = runtimeState.habit;
+
+    if (user == null) return;
+    if (logId == null || logId.isEmpty) return;
+    if (habitId == null || habitId.isEmpty) return;
+
+    try {
+      setState(() {
+        _isAbandoning = true;
+      });
+
+      await controller.abandonSession();
+
+      final penaltyPoints = _habitPenaltyPoints(habit);
+
+      await _pointsService.applyPenaltyPoints(
+        userId: user.id,
+        logId: logId,
+        habitId: habitId,
+        penaltyPoints: penaltyPoints,
+        penaltyReason: 'abandoned',
+      );
+
+      await _badgeService.evaluateAndAwardCoreBadges(userId: user.id);
+
+      _lastHandledPenaltyStatus = 'abandoned';
+
+      final penaltyDelta = _pointsService.calculatePenalty(
+        penaltyPoints: penaltyPoints,
+        penaltyReason: 'abandoned',
+      );
+
+      if (!mounted) return;
+
+      PointsDeltaOverlay.show(context, delta: penaltyDelta);
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Focus session abandoned. -${penaltyDelta.abs()} points'),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not abandon focus: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isAbandoning = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _maybeApplyAutoFailurePenalty() async {
+    if (_isApplyingAutoFailurePenalty) return;
+
+    final controller = ref.read(focusRuntimeControllerProvider);
+    final runtimeState = controller.state;
+    final user = Supabase.instance.client.auth.currentUser;
+
+    final session = runtimeState.session;
+    final status = (session?['status'] ?? '').toString();
+
+    if (status != 'failed') return;
+    if (_lastHandledPenaltyStatus == 'failed') return;
+
+    final logId = runtimeState.logId ?? _logId;
+    final habitId = runtimeState.habitId ?? _habitId;
+    final habit = runtimeState.habit;
+
+    if (user == null || logId == null || habitId == null) return;
+
+    try {
+      _isApplyingAutoFailurePenalty = true;
+
+      final penaltyPoints = _habitPenaltyPoints(habit);
+
+      await _pointsService.applyPenaltyPoints(
+        userId: user.id,
+        logId: logId,
+        habitId: habitId,
+        penaltyPoints: penaltyPoints,
+        penaltyReason: 'failed',
+      );
+
+      await _badgeService.evaluateAndAwardCoreBadges(userId: user.id);
+
+      _lastHandledPenaltyStatus = 'failed';
+
+      final penaltyDelta = _pointsService.calculatePenalty(
+        penaltyPoints: penaltyPoints,
+        penaltyReason: 'failed',
+      );
+
+      if (!mounted) return;
+
+      PointsDeltaOverlay.show(context, delta: penaltyDelta);
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Focus session failed. -${penaltyDelta.abs()} points'),
+        ),
+      );
+    } catch (_) {
+      // Do not crash the screen if penalty application fails.
+    } finally {
+      _isApplyingAutoFailurePenalty = false;
+    }
+  }
+
+  String _formatClockTime(DateTime dt) {
+    final hour = dt.hour;
+    final minute = dt.minute;
+    final suffix = hour >= 12 ? 'PM' : 'AM';
+    final displayHour = hour == 0 ? 12 : hour > 12 ? hour - 12 : hour;
+    return '$displayHour:${minute.toString().padLeft(2, '0')} $suffix';
+  }
+
+  String _formatSeconds(int totalSeconds) {
+    final safe = totalSeconds < 0 ? 0 : totalSeconds;
+    final hours = safe ~/ 3600;
+    final minutes = (safe % 3600) ~/ 60;
+    final seconds = safe % 60;
+
+    final hh = hours.toString().padLeft(2, '0');
+    final mm = minutes.toString().padLeft(2, '0');
+    final ss = seconds.toString().padLeft(2, '0');
+
+    if (hours > 0) return '$hh:$mm:$ss';
+    return '$mm:$ss';
+  }
+
+  String _statusLabel(FocusSessionPhase? phase) {
+    switch (phase) {
+      case FocusSessionPhase.running:
+        return 'Running';
+      case FocusSessionPhase.violationDebounce:
+        return 'Warning';
+      case FocusSessionPhase.grace:
+        return 'Grace';
+      case FocusSessionPhase.completed:
+        return 'Completed';
+      case FocusSessionPhase.failed:
+        return 'Failed';
+      case FocusSessionPhase.abandoned:
+        return 'Abandoned';
+      case FocusSessionPhase.arming:
+        return 'Arming';
+      case FocusSessionPhase.idle:
+      case null:
+        return 'Not started';
+    }
+  }
+
+  Color _statusColor(FocusSessionPhase? phase) {
+    switch (phase) {
+      case FocusSessionPhase.running:
+        return const Color(0xFF4CAF50);
+      case FocusSessionPhase.violationDebounce:
+      case FocusSessionPhase.grace:
+        return const Color(0xFFFFB300);
+      case FocusSessionPhase.completed:
+        return const Color(0xFF2E7D32);
+      case FocusSessionPhase.failed:
+      case FocusSessionPhase.abandoned:
+        return const Color(0xFFE57373);
+      case FocusSessionPhase.arming:
+        return const Color(0xFF90A4AE);
+      case FocusSessionPhase.idle:
+      case null:
+        return const Color(0xFFB3B3BB);
+    }
+  }
+
+  Widget _buildMetricCard({
+    required String label,
+    required String value,
+  }) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: const Color(0xFF17171A),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: const Color(0xFF232329)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              label,
+              style: const TextStyle(
+                color: Color(0xFF9A9AA3),
+                fontSize: 12,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              value,
+              style: const TextStyle(
+                color: Color(0xFFF5F5F5),
+                fontSize: 18,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSimpleInfoCard({
+    required String title,
+    required String text,
+    Widget? action,
+    Color? borderColor,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF17171A),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: borderColor ?? const Color(0xFF232329)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(
+              color: Color(0xFFF5F5F5),
+              fontWeight: FontWeight.w800,
+              fontSize: 16,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            text,
+            style: const TextStyle(
+              color: Color(0xFF9A9AA3),
+              height: 1.4,
+              fontSize: 12,
+            ),
+          ),
+          if (action != null) ...[
+            const SizedBox(height: 14),
+            action,
+          ],
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final runtimeState = ref.watch(focusRuntimeControllerProvider).state;
+    final engineState = runtimeState.engineState;
+    final phase = engineState?.phase;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _maybeApplyAutoFailurePenalty();
+    });
+
+    if (runtimeState.isLoading && runtimeState.session == null) {
+      return const Scaffold(
+        backgroundColor: Color(0xFF0B0B0C),
+        body: Center(
+          child: CircularProgressIndicator(color: Color(0xFFF5F5F5)),
+        ),
+      );
+    }
+
+    if (runtimeState.error != null && runtimeState.session == null) {
+      return Scaffold(
+        backgroundColor: const Color(0xFF0B0B0C),
+        appBar: AppBar(
+          backgroundColor: const Color(0xFF0B0B0C),
+          title: const Text('Focus Mode'),
+        ),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Text(
+              runtimeState.error!,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Color(0xFFB3B3BB)),
+            ),
+          ),
+        ),
+      );
+    }
+
+    final hasLiveSession = runtimeState.hasLiveSession;
+    final isTerminal = phase == FocusSessionPhase.completed ||
+        phase == FocusSessionPhase.failed ||
+        phase == FocusSessionPhase.abandoned;
+    final canStart = !hasLiveSession &&
+        !isTerminal &&
+        runtimeState.session == null &&
+        _isWithinExecutionWindow &&
+        _supportsNativeFocusRuntime;
+
+    final verificationType =
+        (runtimeState.habit?['verification_type'] ?? '').toString();
+    final needsLocation = verificationType.contains('location');
+
+    final validFocusSeconds = engineState?.validFocusSeconds ?? 0;
+    final graceUsed = engineState?.graceSecondsUsed ?? 0;
+
+    final requiredValidSeconds = (() {
+      final minValidMinutes = runtimeState.habit?['min_valid_minutes'];
+      final durationMinutes = runtimeState.habit?['duration_minutes'];
+
+      final minValid = minValidMinutes is int
+          ? minValidMinutes
+          : int.tryParse('${minValidMinutes ?? ''}') ?? 0;
+      if (minValid > 0) return minValid * 60;
+
+      final duration = durationMinutes is int
+          ? durationMinutes
+          : int.tryParse('${durationMinutes ?? ''}') ?? 0;
+      if (duration > 0) return duration * 60;
+
+      return 0;
+    })();
+
+    final remainingRequiredSeconds =
+        (requiredValidSeconds - validFocusSeconds).clamp(0, 1 << 30);
+
+    final graceAllowed = (() {
+      final raw = runtimeState.policySnapshot?['leave_grace_seconds'];
+      if (raw is int && raw > 0) return raw;
+      if (raw is double && raw > 0) return raw.round();
+      final parsed = int.tryParse('${raw ?? ''}');
+      return (parsed != null && parsed > 0) ? parsed : 30;
+    })();
+
+    final graceRemaining = (graceAllowed - graceUsed).clamp(0, 1 << 30);
+
+    final secondsUntilWindowCloses = (() {
+      final end = _windowEnd;
+      if (end == null) return null;
+      final diff = end.difference(AppClock.now()).inSeconds;
+      return diff <= 0 ? 0 : diff;
+    })();
+
+    return Scaffold(
+      backgroundColor: const Color(0xFF0B0B0C),
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF0B0B0C),
+        title: const Text('Focus Mode'),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 18, 16, 28),
+        children: [
+          Container(
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              color: const Color(0xFF17171A),
+              borderRadius: BorderRadius.circular(22),
+              border: Border.all(color: const Color(0xFF232329)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _habitTitle,
+                  style: const TextStyle(
+                    color: Color(0xFFF5F5F5),
+                    fontSize: 24,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  _goalTitle,
+                  style: const TextStyle(
+                    color: Color(0xFF9A9AA3),
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: _statusColor(phase).withValues(alpha: 0.14),
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(color: _statusColor(phase)),
+                  ),
+                  child: Text(
+                    _statusLabel(phase),
+                    style: TextStyle(
+                      color: _statusColor(phase),
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                if (runtimeState.error != null) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    runtimeState.error!,
+                    style: const TextStyle(
+                      color: Color(0xFFFF8A80),
+                      height: 1.35,
+                    ),
+                  ),
+                ],
+                if (runtimeState.syncWarning != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    runtimeState.syncWarning!,
+                    style: const TextStyle(
+                      color: Color(0xFFFFB74D),
+                      height: 1.35,
+                    ),
+                  ),
+                ],
+                if (engineState?.activeViolationMessage != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    engineState!.activeViolationMessage!,
+                    style: const TextStyle(
+                      color: Color(0xFFFFB300),
+                      height: 1.35,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          if (!_supportsNativeFocusRuntime) ...[
+            const SizedBox(height: 12),
+            _buildSimpleInfoCard(
+              title: 'Unsupported runtime',
+              text:
+                  'Live Focus Mode monitoring works on Android phones and Android emulators. You can still browse this screen here, but live app monitoring cannot start on this target.',
+              borderColor: const Color(0xFFFFB74D),
+            ),
+          ],
+          if (isTerminal) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: const Color(0xFF17171A),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: const Color(0xFF232329)),
+              ),
+              child: const Text(
+                'This focus session is closed. You cannot restart or re-enter it.',
+                style: TextStyle(
+                  color: Color(0xFFB3B3BB),
+                  height: 1.35,
+                ),
+              ),
+            ),
+          ],
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              _buildMetricCard(
+                label: 'Valid focus',
+                value: _formatSeconds(validFocusSeconds),
+              ),
+              const SizedBox(width: 10),
+              _buildMetricCard(
+                label: 'Remaining target',
+                value: _formatSeconds(remainingRequiredSeconds),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              _buildMetricCard(
+                label: 'Grace remaining',
+                value: _formatSeconds(graceRemaining),
+              ),
+              const SizedBox(width: 10),
+              _buildMetricCard(
+                label: 'Window left',
+                value: secondsUntilWindowCloses != null
+                    ? _formatSeconds(secondsUntilWindowCloses)
+                    : '--',
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              _buildMetricCard(
+                label: 'App violations',
+                value: '${engineState?.appViolationCount ?? 0}',
+              ),
+              const SizedBox(width: 10),
+              _buildMetricCard(
+                label: 'Location violations',
+                value: '${engineState?.locationViolationCount ?? 0}',
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          _buildSimpleInfoCard(
+            title: 'Focus rules',
+            text: !_supportsNativeFocusRuntime
+                ? 'This target can view the Focus screen, but live app monitoring only runs on Android devices and Android emulators.'
+                : needsLocation
+                    ? 'Achievr is always allowed. Counting continues while you stay in Achievr or an allowed app. Location setup and permissions are managed from Verification.'
+                    : 'Achievr is always allowed. Counting continues while you stay in Achievr or an allowed app. A warning hold runs before grace begins.',
+            action: (needsLocation && !runtimeState.locationPermissionReady)
+                ? SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton(
+                      onPressed: _openVerificationSettings,
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFFF5F5F5),
+                        side: const BorderSide(color: Color(0xFF3A3A42)),
+                      ),
+                      child: const Text('Open Verification'),
+                    ),
+                  )
+                : null,
+          ),
+          const SizedBox(height: 18),
+          if (needsLocation && !runtimeState.locationPermissionReady)
+            SizedBox(
+              height: 48,
+              child: OutlinedButton(
+                onPressed: _isPreparingLocation ? null : _requestLocationAccess,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFFF5F5F5),
+                  side: const BorderSide(color: Color(0xFF3A3A42)),
+                ),
+                child: Text(
+                  _isPreparingLocation ? 'Checking...' : 'Refresh Location Access',
+                ),
+              ),
+            ),
+          if (needsLocation && !runtimeState.locationPermissionReady)
+            const SizedBox(height: 18),
+          if (canStart)
+            SizedBox(
+              height: 52,
+              child: ElevatedButton.icon(
+                onPressed: _isStarting ? null : _startFocus,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFF5F5F5),
+                  foregroundColor: Colors.black,
+                ),
+                icon: _isStarting
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.play_arrow),
+                label: const Text(
+                  'Start Focus',
+                  style: TextStyle(fontWeight: FontWeight.w800),
+                ),
+              ),
+            ),
+          if (!canStart && !hasLiveSession && !isTerminal)
+            SizedBox(
+              height: 52,
+              child: ElevatedButton.icon(
+                onPressed: null,
+                style: ElevatedButton.styleFrom(
+                  disabledBackgroundColor: const Color(0xFF2A2A2F),
+                  disabledForegroundColor: const Color(0xFF6F6F76),
+                ),
+                icon: Icon(
+                  _supportsNativeFocusRuntime
+                      ? Icons.lock_outline
+                      : Icons.desktop_windows_outlined,
+                ),
+                label: Text(
+                  !_supportsNativeFocusRuntime
+                      ? 'Android device or emulator required'
+                      : _isWithinExecutionWindow
+                          ? 'Focus unavailable'
+                          : 'Outside execution window',
+                ),
+              ),
+            ),
+          if (hasLiveSession) ...[
+            SizedBox(
+              height: 52,
+              child: ElevatedButton.icon(
+                onPressed: _isCompleting ? null : _completeFocus,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF4CAF50),
+                  foregroundColor: Colors.white,
+                ),
+                icon: _isCompleting
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.check_circle_outline),
+                label: const Text(
+                  'Complete Focus',
+                  style: TextStyle(fontWeight: FontWeight.w800),
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              height: 48,
+              child: OutlinedButton.icon(
+                onPressed: _isAbandoning ? null : _abandonFocus,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFFFF8A80),
+                  side: const BorderSide(color: Color(0xFFFF8A80)),
+                ),
+                icon: _isAbandoning
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.stop_circle_outlined),
+                label: const Text(
+                  'Abandon Session',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
