@@ -17,6 +17,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:achievr_app/Services/verification_service.dart';
 
 class FocusModeScreen extends ConsumerStatefulWidget {
   final Map<String, dynamic> log;
@@ -36,6 +37,7 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
       LocationRuntimeService();
   final PointsService _pointsService = PointsService();
   final BadgeService _badgeService = BadgeService();
+  final VerificationService _verificationService = VerificationService();
 
   bool _isStarting = false;
   bool _isCompleting = false;
@@ -44,6 +46,39 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
 
   String? _lastHandledPenaltyStatus;
   bool _isApplyingAutoFailurePenalty = false;
+
+  bool _isApplyingAutoCompletion = false;
+  String? _lastHandledCompletionLogId;
+
+  bool _needsPartnerVerification(Map<String, dynamic>? habit) {
+    final type = (habit?['verification_type'] ?? '').toString();
+    final requiresVerifier = habit?['requires_verifier'] == true;
+
+    return requiresVerifier ||
+        type == 'partner' ||
+        type == 'focus_partner' ||
+        type == 'location_partner' ||
+        type == 'location_focus_partner';
+  }
+
+  Future<void> _submitCompletedFocusForPartnerReview({
+    required String logId,
+    required String habitId,
+  }) async {
+    await _verificationService.ensurePartnerVerificationRequestForLog(
+      logId: logId,
+      habitId: habitId,
+      note: 'Focus task completed and submitted for partner review.',
+    );
+
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Submitted for partner review.'),
+      ),
+    );
+  }
 
   Timer? _uiClockTimer;
 
@@ -55,9 +90,16 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
 
     AppClock.debugNowNotifier.addListener(_handleClockChange);
 
-    _uiClockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+    _uiClockTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
       if (!mounted) return;
-      setState(() {});
+
+      final controller = ref.read(focusRuntimeControllerProvider);
+        await controller.recomputeFromAppClock();
+        await _maybeApplyAutoCompletion();
+        await _maybeApplyAutoFailurePenalty();
+
+        if (!mounted) return;
+        setState(() {});
     });
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -65,10 +107,20 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
       final requestedLogId = widget.log['log_id']?.toString();
 
       if (controller.isSameActiveLog(requestedLogId)) {
+        await controller.recomputeFromAppClock();
+        await _maybeApplyAutoCompletion();
+        await _maybeApplyAutoFailurePenalty();
+
+        if (mounted) setState(() {});
         return;
       }
 
       await controller.attachToLog(widget.log);
+      await controller.recomputeFromAppClock();
+      await _maybeApplyAutoCompletion();
+      await _maybeApplyAutoFailurePenalty();
+
+      if (mounted) setState(() {});
     });
   }
 
@@ -79,7 +131,15 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
     super.dispose();
   }
 
-  void _handleClockChange() {
+  Future<void> _handleClockChange() async {
+    if (!mounted) return;
+
+    final controller = ref.read(focusRuntimeControllerProvider);
+
+    await controller.recomputeFromAppClock();
+    await _maybeApplyAutoCompletion();
+    await _maybeApplyAutoFailurePenalty();
+
     if (!mounted) return;
     setState(() {});
   }
@@ -389,36 +449,55 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
       final thresholdMet = engineState?.thresholdMet ?? false;
       final phase = controller.state.phaseLabel;
 
-      if (thresholdMet) {
-        final basePoints = _habitBasePoints(habit);
-        final verificationType = _habitVerificationType(habit);
-
-        await _pointsService.applyCompletionPoints(
-          userId: user.id,
+    if (thresholdMet) {
+      if (_needsPartnerVerification(habit)) {
+        await _verificationService.submitLogForVerification(
           logId: logId,
           habitId: habitId,
-          basePoints: basePoints,
-          verificationType: verificationType,
-        );
-
-        await _badgeService.evaluateAndAwardCoreBadges(userId: user.id);
-
-        final awarded = _pointsService.calculateCompletionAward(
-          basePoints: basePoints,
-          verificationType: verificationType,
+          note: 'Focus task completed and submitted for partner review.',
         );
 
         if (!mounted) return;
 
-        PointsDeltaOverlay.show(context, delta: awarded);
-
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Focus session completed. +$awarded points'),
+          const SnackBar(
+            content: Text('Submitted for partner review.'),
           ),
         );
+
         return;
       }
+
+      final basePoints = _habitBasePoints(habit);
+      final verificationType = _habitVerificationType(habit);
+
+      await _pointsService.applyCompletionPoints(
+        userId: user.id,
+        logId: logId,
+        habitId: habitId,
+        basePoints: basePoints,
+        verificationType: verificationType,
+      );
+
+      await _badgeService.evaluateAndAwardCoreBadges(userId: user.id);
+
+      final awarded = _pointsService.calculateCompletionAward(
+        basePoints: basePoints,
+        verificationType: verificationType,
+      );
+
+      if (!mounted) return;
+
+      PointsDeltaOverlay.show(context, delta: awarded);
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Focus session completed. +$awarded points'),
+        ),
+      );
+
+      return;
+    }
 
       final finalSession = controller.state.session;
       final finalStatus = (finalSession?['status'] ?? '').toString();
@@ -541,6 +620,131 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
       }
     }
   }
+
+    Future<void> _maybeApplyAutoCompletion() async {
+      if (_isApplyingAutoCompletion) return;
+      if (_isCompleting) return;
+
+      final controller = ref.read(focusRuntimeControllerProvider);
+      final runtimeState = controller.state;
+      final user = Supabase.instance.client.auth.currentUser;
+
+      final engineState = runtimeState.engineState;
+      final phase = engineState?.phase;
+      final thresholdMet = engineState?.thresholdMet ?? false;
+
+      final session = runtimeState.session;
+      final sessionStatus = (session?['status'] ?? '').toString();
+
+      final logId = runtimeState.logId ?? _logId;
+      final habitId = runtimeState.habitId ?? _habitId;
+      final habit = runtimeState.habit;
+
+      if (user == null) return;
+      if (logId == null || logId.isEmpty) return;
+      if (habitId == null || habitId.isEmpty) return;
+
+      // Already handled on this screen instance.
+      if (_lastHandledCompletionLogId == logId) return;
+
+      // Already terminal in DB/session state.
+      if (sessionStatus == 'completed' ||
+          sessionStatus == 'failed' ||
+          sessionStatus == 'abandoned') {
+        return;
+      }
+
+      // Only auto-complete when the engine genuinely says the requirement is met.
+      if (!thresholdMet && phase != FocusSessionPhase.completed) return;
+
+      try {
+        _isApplyingAutoCompletion = true;
+        _lastHandledCompletionLogId = logId;
+
+        await controller.completeSession();
+
+        final latestEngineState = controller.state.engineState;
+        final latestThresholdMet =
+            latestEngineState?.thresholdMet ?? thresholdMet;
+
+        if (!latestThresholdMet) {
+          _lastHandledCompletionLogId = null;
+          return;
+        }
+        
+        if (_needsPartnerVerification(habit)) {
+          await _submitCompletedFocusForPartnerReview(
+            logId: logId,
+            habitId: habitId,
+          );
+
+          if (mounted) {
+            setState(() {});
+          }
+
+          return;
+        }       
+
+        if (_needsPartnerVerification(habit)) {
+          await _verificationService.submitLogForVerification(
+            logId: logId,
+            habitId: habitId,
+            note: 'Focus task completed automatically and submitted for partner review.',
+          );
+
+          if (!mounted) return;
+
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Submitted for partner review.'),
+            ),
+          );
+
+          setState(() {});
+          return;
+        }
+
+        final basePoints = _habitBasePoints(habit);
+        final verificationType = _habitVerificationType(habit);
+
+        await _pointsService.applyCompletionPoints(
+          userId: user.id,
+          logId: logId,
+          habitId: habitId,
+          basePoints: basePoints,
+          verificationType: verificationType,
+        );
+
+        await _badgeService.evaluateAndAwardCoreBadges(userId: user.id);
+
+        final awarded = _pointsService.calculateCompletionAward(
+          basePoints: basePoints,
+          verificationType: verificationType,
+        );
+
+        if (!mounted) return;
+
+        PointsDeltaOverlay.show(context, delta: awarded);
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Focus session completed. +$awarded points'),
+          ),
+        );
+
+        setState(() {});
+      } catch (e) {
+        _lastHandledCompletionLogId = null;
+
+        if (!mounted) return;
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not auto-complete focus: $e')),
+        );
+      } finally {
+        _isApplyingAutoCompletion = false;
+      }
+    }  
 
   Future<void> _maybeApplyAutoFailurePenalty() async {
     if (_isApplyingAutoFailurePenalty) return;
@@ -747,10 +951,6 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
     final runtimeState = ref.watch(focusRuntimeControllerProvider).state;
     final engineState = runtimeState.engineState;
     final phase = engineState?.phase;
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _maybeApplyAutoFailurePenalty();
-    });
 
     if (runtimeState.isLoading && runtimeState.session == null) {
       return const Scaffold(

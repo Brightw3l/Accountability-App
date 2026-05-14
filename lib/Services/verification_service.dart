@@ -519,6 +519,46 @@ class VerificationService {
     return List<Map<String, dynamic>>.from(response);
   }
 
+  Future<void> ensurePartnerVerificationRequestForLog({
+    required String logId,
+    required String habitId,
+    String? note,
+  }) async {
+    final existingPending = await _supabase
+        .from('log_verification_requests')
+        .select('request_id')
+        .eq('log_id', logId)
+        .eq('status', 'pending')
+        .maybeSingle();
+
+    if (existingPending != null) {
+      await _supabase.from('habit_logs').update({
+        'status': 'pending_verification',
+        'submitted_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('log_id', logId);
+
+      return;
+    }
+
+    await submitLogForVerification(
+      logId: logId,
+      habitId: habitId,
+      note: note ?? 'Submitted for partner review.',
+    );
+
+    final created = await _supabase
+        .from('log_verification_requests')
+        .select('request_id')
+        .eq('log_id', logId)
+        .eq('status', 'pending')
+        .maybeSingle();
+
+    if (created == null) {
+      throw Exception(
+        'Partner verification request was not created for this log.',
+      );
+    }
+  }
   Future<void> submitLogForVerification({
     required String logId,
     required String habitId,
@@ -595,8 +635,11 @@ class VerificationService {
       'pending',
       'in_progress',
       'ready',
+      'submitted',
+      'pending_verification',
       'failed',
       'rejected',
+      'done',
     };
 
     if (currentStatus.isNotEmpty &&
@@ -758,18 +801,9 @@ class VerificationService {
       throw Exception('Habit not found.');
     }
 
-    await _supabase
-        .from('log_verification_requests')
-        .update({
-          'status': 'approved',
-          'decision_note': decisionNote,
-          'reviewed_at': DateTime.now().toIso8601String(),
-        })
-        .eq('request_id', requestId);
-
     await _supabase.from('habit_logs').update({
       'status': 'done',
-      'closed_at': DateTime.now().toIso8601String(),
+      'closed_at': DateTime.now().toUtc().toIso8601String(),
     }).eq('log_id', logId);
 
     final basePoints = _coerceInt(habit['base_points']) ?? 0;
@@ -785,6 +819,15 @@ class VerificationService {
     );
 
     await _badgeService.evaluateAndAwardCoreBadges(userId: requesterUserId);
+
+    await _supabase
+        .from('log_verification_requests')
+        .update({
+          'status': 'approved',
+          'decision_note': decisionNote,
+          'reviewed_at': DateTime.now().toUtc().toIso8601String(),
+        })
+        .eq('request_id', requestId);
   }
 
   Future<void> rejectVerificationRequest({
@@ -834,18 +877,9 @@ class VerificationService {
       throw Exception('Habit not found.');
     }
 
-    await _supabase
-        .from('log_verification_requests')
-        .update({
-          'status': 'rejected',
-          'decision_note': decisionNote,
-          'reviewed_at': DateTime.now().toIso8601String(),
-        })
-        .eq('request_id', requestId);
-
     await _supabase.from('habit_logs').update({
       'status': 'rejected',
-      'failed_at': DateTime.now().toIso8601String(),
+      'failed_at': DateTime.now().toUtc().toIso8601String(),
       'failure_reason': decisionNote ?? 'Rejected by verifier',
     }).eq('log_id', logId);
 
@@ -860,6 +894,15 @@ class VerificationService {
     );
 
     await _badgeService.evaluateAndAwardCoreBadges(userId: requesterUserId);
+
+    await _supabase
+        .from('log_verification_requests')
+        .update({
+          'status': 'rejected',
+          'decision_note': decisionNote,
+          'reviewed_at': DateTime.now().toUtc().toIso8601String(),
+        })
+        .eq('request_id', requestId);
   }
 
   // =========================================================

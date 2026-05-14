@@ -1,4 +1,6 @@
-// ignore_for_file: unused_element_parameter
+// ignore_for_file: unused_element_parameter, deprecated_member_use
+
+import 'dart:async';
 
 import 'package:achievr_app/Screens/Social/friend_profile_screen.dart';
 import 'package:achievr_app/Screens/Social/friend_requests_screen.dart';
@@ -18,12 +20,14 @@ class SocialScreen extends StatefulWidget {
   State<SocialScreen> createState() => _SocialScreenState();
 }
 
-class _SocialScreenState extends State<SocialScreen> {
+class _SocialScreenState extends State<SocialScreen>
+    with WidgetsBindingObserver {
   final SupabaseClient supabase = Supabase.instance.client;
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
   bool _isLoading = true;
   bool _isSigningOut = false;
+  bool _isRefreshingSoftly = false;
   String? _error;
 
   Map<String, dynamic>? _profile;
@@ -32,17 +36,130 @@ class _SocialScreenState extends State<SocialScreen> {
   int _friendCount = 0;
   int _incomingRequestCount = 0;
 
+  RealtimeChannel? _statsChannel;
+  RealtimeChannel? _profileChannel;
+  Timer? _refreshDebounce;
+
   @override
   void initState() {
     super.initState();
-    _loadSocialData();
+
+    WidgetsBinding.instance.addObserver(this);
+
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await _loadSocialData();
+      _subscribeToLiveUpdates();
+    });
   }
 
-  Future<void> _loadSocialData() async {
-    setState(() {
-      _isLoading = true;
-      _error = null;
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _refreshDebounce?.cancel();
+
+    if (_statsChannel != null) {
+      supabase.removeChannel(_statsChannel!);
+    }
+
+    if (_profileChannel != null) {
+      supabase.removeChannel(_profileChannel!);
+    }
+
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _refreshNow();
+    }
+  }
+
+  void _scheduleRefresh() {
+    _refreshDebounce?.cancel();
+
+    _refreshDebounce = Timer(const Duration(milliseconds: 350), () {
+      _refreshNow();
     });
+  }
+
+  Future<void> _refreshNow() async {
+    if (!mounted) return;
+    await _loadSocialData(showLoader: false);
+  }
+
+  void _subscribeToLiveUpdates() {
+    final user = supabase.auth.currentUser;
+    if (user == null) return;
+
+    if (_statsChannel != null) {
+      supabase.removeChannel(_statsChannel!);
+    }
+
+    if (_profileChannel != null) {
+      supabase.removeChannel(_profileChannel!);
+    }
+
+    _statsChannel = supabase.channel('live-user-discipline-stats-${user.id}')
+      ..onPostgresChanges(
+        event: PostgresChangeEvent.all,
+        schema: 'public',
+        table: 'user_discipline_stats',
+        filter: PostgresChangeFilter(
+          type: PostgresChangeFilterType.eq,
+          column: 'user_id',
+          value: user.id,
+        ),
+        callback: (payload) {
+          final newRecord = payload.newRecord;
+
+          if (newRecord.isNotEmpty && mounted) {
+            setState(() {
+              _disciplineStats = Map<String, dynamic>.from(newRecord);
+            });
+          }
+
+          _scheduleRefresh();
+        },
+      )
+      ..subscribe();
+
+    _profileChannel = supabase.channel('live-profile-${user.id}')
+      ..onPostgresChanges(
+        event: PostgresChangeEvent.all,
+        schema: 'public',
+        table: 'profiles',
+        filter: PostgresChangeFilter(
+          type: PostgresChangeFilterType.eq,
+          column: 'id',
+          value: user.id,
+        ),
+        callback: (payload) {
+          final newRecord = payload.newRecord;
+
+          if (newRecord.isNotEmpty && mounted) {
+            setState(() {
+              _profile = Map<String, dynamic>.from(newRecord);
+            });
+          }
+
+          _scheduleRefresh();
+        },
+      )
+      ..subscribe();
+  }
+
+  Future<void> _loadSocialData({bool showLoader = true}) async {
+    if (showLoader) {
+      setState(() {
+        _isLoading = true;
+        _error = null;
+      });
+    } else {
+      if (_isRefreshingSoftly) return;
+      _isRefreshingSoftly = true;
+      _error = null;
+    }
 
     try {
       final user = supabase.auth.currentUser;
@@ -52,6 +169,7 @@ class _SocialScreenState extends State<SocialScreen> {
         setState(() {
           _error = 'No authenticated user found.';
           _isLoading = false;
+          _isRefreshingSoftly = false;
         });
         return;
       }
@@ -113,6 +231,7 @@ class _SocialScreenState extends State<SocialScreen> {
         _friendCount = friendships.length;
         _incomingRequestCount = requests.length;
         _isLoading = false;
+        _isRefreshingSoftly = false;
       });
     } catch (e, st) {
       debugPrint('SOCIAL SCREEN ERROR: $e');
@@ -123,6 +242,7 @@ class _SocialScreenState extends State<SocialScreen> {
       setState(() {
         _error = 'Failed to load social page.\n$e';
         _isLoading = false;
+        _isRefreshingSoftly = false;
       });
     }
   }
@@ -157,39 +277,47 @@ class _SocialScreenState extends State<SocialScreen> {
     }
   }
 
-  void _openFriends() {
-    Navigator.push(
+  Future<void> _openFriends() async {
+    await Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => const FriendsScreen()),
-    ).then((_) => _loadSocialData());
+    );
+
+    await _refreshNow();
   }
 
-  void _openRequests() {
-    Navigator.push(
+  Future<void> _openRequests() async {
+    await Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => const FriendRequestsScreen()),
-    ).then((_) => _loadSocialData());
+    );
+
+    await _refreshNow();
   }
 
-  void _openVerification() {
-    Navigator.push(
+  Future<void> _openVerification() async {
+    await Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => const VerificationSettingsScreen()),
-    ).then((_) => _loadSocialData());
+    );
+
+    await _refreshNow();
   }
 
-  void _openVisibility() {
-    Navigator.push(
+  Future<void> _openVisibility() async {
+    await Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => const SharedProgressScreen()),
-    ).then((_) => _loadSocialData());
+    );
+
+    await _refreshNow();
   }
 
-  void _openOwnProfile() {
+  Future<void> _openOwnProfile() async {
     final user = supabase.auth.currentUser;
     if (user == null) return;
 
-    Navigator.push(
+    await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => FriendProfileScreen(
@@ -197,7 +325,9 @@ class _SocialScreenState extends State<SocialScreen> {
           isFriend: true,
         ),
       ),
-    ).then((_) => _loadSocialData());
+    );
+
+    await _refreshNow();
   }
 
   void _showComingSoonSetting(String title) {
@@ -447,7 +577,7 @@ class _SocialScreenState extends State<SocialScreen> {
                   runSpacing: 8,
                   children: [
                     _miniBadge(_currentTitle),
-                    _miniBadge('$_currentStreak day streak'),
+                    _streakBadge(),
                     _xpBadge(),
                   ],
                 ),
@@ -475,6 +605,29 @@ class _SocialScreenState extends State<SocialScreen> {
           color: Color(0xFFF8F8F8),
           fontSize: 12,
           fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
+
+  Widget _streakBadge() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+      decoration: BoxDecoration(
+        color: const Color(0xFF202026),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: const Color(0xFF303038)),
+      ),
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 220),
+        child: Text(
+          '$_currentStreak day streak',
+          key: ValueKey<int>(_currentStreak),
+          style: const TextStyle(
+            color: Color(0xFFF8F8F8),
+            fontSize: 12,
+            fontWeight: FontWeight.w800,
+          ),
         ),
       ),
     );
@@ -572,7 +725,8 @@ class _SocialScreenState extends State<SocialScreen> {
                 child: _socialActionCard(
                   icon: Icons.visibility_rounded,
                   title: 'Visibility',
-                  subtitle: _profileIsPublic ? 'Profile is public' : 'Profile is private',
+                  subtitle:
+                      _profileIsPublic ? 'Profile is public' : 'Profile is private',
                   onTap: _openVisibility,
                 ),
               ),
@@ -706,7 +860,8 @@ class _SocialScreenState extends State<SocialScreen> {
                     _drawerTile(
                       icon: Icons.notifications_active_rounded,
                       title: 'Reminder tones',
-                      subtitle: 'Sounds for reminders, warnings, and missed windows',
+                      subtitle:
+                          'Sounds for reminders, warnings, and missed windows',
                       onTap: () => _showComingSoonSetting('Reminder tone'),
                     ),
                     _drawerTile(
@@ -718,7 +873,8 @@ class _SocialScreenState extends State<SocialScreen> {
                     _drawerTile(
                       icon: Icons.today_rounded,
                       title: 'Daily planning',
-                      subtitle: 'Planning prompts, startup flow, and shutdown flow',
+                      subtitle:
+                          'Planning prompts, startup flow, and shutdown flow',
                       onTap: () => _showComingSoonSetting('Daily planning'),
                     ),
                     _drawerTile(
@@ -912,7 +1068,7 @@ class _SocialScreenState extends State<SocialScreen> {
     }
 
     return HoldToRefreshWrapper(
-      onRefresh: _loadSocialData,
+      onRefresh: () => _loadSocialData(showLoader: false),
       child: SingleChildScrollView(
         physics: const BouncingScrollPhysics(
           parent: AlwaysScrollableScrollPhysics(),

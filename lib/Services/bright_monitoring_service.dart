@@ -14,6 +14,11 @@ class BrightMonitoringService {
     'rejected',
   };
 
+  static const Set<String> completedStatuses = {
+    'done',
+    'approved',
+  };
+
   Future<List<Map<String, dynamic>>> getOpenEvents({
     required String userId,
     int limit = 20,
@@ -83,16 +88,20 @@ class BrightMonitoringService {
   }) async {
     await _supabase
         .from('bright_events')
-        .update({'status': 'seen'}).eq('event_id', eventId);
+        .update({'status': 'seen'})
+        .eq('event_id', eventId);
   }
 
   Future<void> resolveEvent({
     required String eventId,
   }) async {
-    await _supabase.from('bright_events').update({
-      'status': 'resolved',
-      'resolved_at': DateTime.now().toUtc().toIso8601String(),
-    }).eq('event_id', eventId);
+    await _supabase
+        .from('bright_events')
+        .update({
+          'status': 'resolved',
+          'resolved_at': DateTime.now().toUtc().toIso8601String(),
+        })
+        .eq('event_id', eventId);
   }
 
   Future<void> dismissEvent({
@@ -100,7 +109,8 @@ class BrightMonitoringService {
   }) async {
     await _supabase
         .from('bright_events')
-        .update({'status': 'dismissed'}).eq('event_id', eventId);
+        .update({'status': 'dismissed'})
+        .eq('event_id', eventId);
   }
 
   Future<void> monitorMissedTasks({
@@ -120,7 +130,6 @@ class BrightMonitoringService {
             status,
             scheduled_start,
             scheduled_end,
-            created_at,
             habits (
               habit_id,
               title,
@@ -132,7 +141,8 @@ class BrightMonitoringService {
           .eq('user_id', userId)
           .gte('log_date', _dateOnly(fromDate))
           .inFilter('status', missedStatuses.toList())
-          .order('log_date', ascending: false);
+          .order('log_date', ascending: false)
+          .order('scheduled_start', ascending: false);
 
       final missedLogs = List<Map<String, dynamic>>.from(logsResponse);
 
@@ -148,6 +158,10 @@ class BrightMonitoringService {
     } catch (e, st) {
       debugPrint('BRIGHT monitor error: $e');
       debugPrintStack(stackTrace: st);
+
+      // Important: never rethrow here.
+      // BRIGHT monitoring should not crash the main app flow.
+      return;
     }
   }
 
@@ -175,11 +189,7 @@ class BrightMonitoringService {
       'event_id': eventId,
       'reason_category': safeCategory,
       'user_note': trimmedReason,
-
-      // You asked for the raw reason to be shared.
-      // This intentionally stores the same text for partners.
       'partner_visible_summary': trimmedReason,
-
       'share_with_partners': shareWithPartners,
       'shared_at': shareWithPartners
           ? DateTime.now().toUtc().toIso8601String()
@@ -243,7 +253,8 @@ class BrightMonitoringService {
     final logId = log['log_id']?.toString();
     final habitId = log['habit_id']?.toString();
 
-    if (logId == null || habitId == null) return;
+    if (logId == null || logId.isEmpty) return;
+    if (habitId == null || habitId.isEmpty) return;
 
     final habit = _asMap(log['habits']);
     final habitTitle = (habit['title'] ?? 'Task').toString();
@@ -463,6 +474,7 @@ class BrightMonitoringService {
         .eq('user_id', userId)
         .eq('log_id', logId)
         .eq('event_type', eventType)
+        .limit(1)
         .maybeSingle();
 
     return response != null;
@@ -487,6 +499,7 @@ class BrightMonitoringService {
         .eq('event_type', eventType)
         .inFilter('status', ['unread', 'seen'])
         .gte('created_at', since)
+        .limit(1)
         .maybeSingle();
 
     return response != null;
@@ -537,7 +550,7 @@ class BrightMonitoringService {
 
       if (missedStatuses.contains(status)) {
         streak++;
-      } else if (status == 'done' || status == 'approved') {
+      } else if (completedStatuses.contains(status)) {
         break;
       }
     }
@@ -572,7 +585,7 @@ class BrightMonitoringService {
 
     for (final log in logs) {
       final habitId = log['habit_id']?.toString();
-      if (habitId == null) continue;
+      if (habitId == null || habitId.isEmpty) continue;
 
       final habit = _asMap(log['habits']);
       final habitTitle = (habit['title'] ?? 'Habit').toString();
@@ -597,9 +610,11 @@ class BrightMonitoringService {
         .from('habits')
         .select('habit_id, title, duration_minutes, verification_type')
         .eq('habit_id', habitId)
+        .limit(1)
         .maybeSingle();
 
-    return response == null ? <String, dynamic>{} : Map<String, dynamic>.from(response);
+    if (response == null) return <String, dynamic>{};
+    return Map<String, dynamic>.from(response);
   }
 
   List<String> _recommendationOptionsForReason(String reasonCategory) {
@@ -664,10 +679,9 @@ class BrightMonitoringService {
   }
 
   String _dateOnly(DateTime date) {
-    final utc = date.toUtc();
-    final year = utc.year.toString().padLeft(4, '0');
-    final month = utc.month.toString().padLeft(2, '0');
-    final day = utc.day.toString().padLeft(2, '0');
+    final year = date.year.toString().padLeft(4, '0');
+    final month = date.month.toString().padLeft(2, '0');
+    final day = date.day.toString().padLeft(2, '0');
     return '$year-$month-$day';
   }
 }
@@ -694,7 +708,7 @@ class _HabitPerformanceBuilder {
 
     totalCount++;
 
-    if (status == 'done' || status == 'approved') {
+    if (BrightMonitoringService.completedStatuses.contains(status)) {
       doneCount++;
       return;
     }

@@ -1,4 +1,4 @@
-// ignore_for_file: unused_local_variable, unused_element, use_build_context_synchronously, unused_import, unused_field, duplicate_import
+// ignore_for_file: unused_local_variable, unused_element, unused_import, unused_field, duplicate_import
 
 import 'dart:async';
 
@@ -92,6 +92,9 @@ class _TodayScreenState extends ConsumerState<TodayScreen> {
   bool _isPreparingLocation = false;
   String? _error;
 
+  final bool _isApplyingAutoCompletion = false;
+  String? _lastHandledCompletionLogId;
+
   Timer? _clockTimer;
 
   static const Duration _gracePeriod = Duration(minutes: 30);
@@ -113,9 +116,14 @@ class _TodayScreenState extends ConsumerState<TodayScreen> {
     });
   }
 
-  void _handleClockChange() {
+  Future<void> _handleClockChange() async {
     if (!mounted) return;
-    _loadTodayData();
+
+    final controller = ref.read(focusRuntimeControllerProvider);
+    await controller.recomputeFromAppClock();
+
+    if (!mounted) return;
+    setState(() {});
   }
 
   @override
@@ -123,6 +131,45 @@ class _TodayScreenState extends ConsumerState<TodayScreen> {
     AppClock.debugNowNotifier.removeListener(_handleClockChange);
     _clockTimer?.cancel();
     super.dispose();
+  }
+
+  void _showSnack(String message) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(content: Text(message)),
+      );
+  }
+
+  void _showPointsDelta(int delta) {
+    if (!mounted) return;
+    PointsDeltaOverlay.show(context, delta: delta);
+  }
+
+  Future<T?> _showAchievrBottomSheet<T>({
+    required WidgetBuilder builder,
+    bool isScrollControlled = false,
+    bool useSafeArea = false,
+  }) {
+    if (!mounted) return Future<T?>.value(null);
+
+    return showModalBottomSheet<T>(
+      context: context,
+      isScrollControlled: isScrollControlled,
+      useSafeArea: useSafeArea,
+      backgroundColor: const Color(0xFF17171A),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: builder,
+    );
+  }
+
+  Future<T?> _pushAchievrRoute<T>(Route<T> route) {
+    if (!mounted) return Future<T?>.value(null);
+    return Navigator.of(context).push<T>(route);
   }
 
   int _habitPenaltyPointsFromLog(Map<String, dynamic> log) {
@@ -228,14 +275,10 @@ Future<void> _openMissedReasonSheet(Map<String, dynamic> log) async {
     logId: logId,
   );
 
-  if (alreadyExplained) {
-    if (!mounted) return;
+  if (!mounted) return;
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('BRIGHT already has a reason for this missed task.'),
-      ),
-    );
+  if (alreadyExplained) {
+    _showSnack('BRIGHT already has a reason for this missed task.');
     return;
   }
 
@@ -245,209 +288,209 @@ Future<void> _openMissedReasonSheet(Map<String, dynamic> log) async {
   String selectedReason = 'bad_timing';
   bool shareWithPartners = true;
 
-  final submitted = await showModalBottomSheet<bool>(
-    context: context,
-    isScrollControlled: true,
-    backgroundColor: const Color(0xFF17171A),
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-    ),
-    builder: (sheetContext) {
-      return StatefulBuilder(
-        builder: (context, setSheetState) {
-          final reasonLength = noteController.text.trim().length;
-          final canSaveReason = reasonLength >= minReasonLength;
+  try {
+    final submitted = await _showAchievrBottomSheet<bool>(
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (modalContext) {
+        return StatefulBuilder(
+          builder: (modalContext, setSheetState) {
+            final reasonLength = noteController.text.trim().length;
+            final canSaveReason = reasonLength >= minReasonLength;
 
-          return Padding(
-            padding: EdgeInsets.fromLTRB(
-              16,
-              16,
-              16,
-              MediaQuery.of(context).viewInsets.bottom + 20,
-            ),
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Center(
-                    child: Text(
-                      'Tell BRIGHT what happened',
-                      style: TextStyle(
-                        color: Color(0xFFF5F5F5),
-                        fontSize: 20,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  Center(
-                    child: Text(
-                      'You missed $habitTitle. Your reason helps BRIGHT understand whether this was a one-off miss or a system problem.',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        color: Color(0xFFB3B3BB),
-                        height: 1.4,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 18),
-                  const Text(
-                    'Main reason',
-                    style: TextStyle(
-                      color: Color(0xFFF5F5F5),
-                      fontSize: 13,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: _missReasonOptions.map((option) {
-                      final value = option['value']!;
-                      final label = option['label']!;
-                      final selected = selectedReason == value;
-
-                      return ChoiceChip(
-                        label: Text(label),
-                        selected: selected,
-                        onSelected: (_) {
-                          setSheetState(() {
-                            selectedReason = value;
-                          });
-                        },
-                        selectedColor: const Color(0xFFF5F5F5),
-                        backgroundColor: const Color(0xFF101013),
-                        labelStyle: TextStyle(
-                          color:
-                              selected ? Colors.black : const Color(0xFFF5F5F5),
-                          fontWeight: FontWeight.w700,
-                        ),
-                        side: const BorderSide(color: Color(0xFF2A2A2F)),
-                      );
-                    }).toList(),
-                  ),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: noteController,
-                    maxLines: 4,
-                    onChanged: (_) {
-                      setSheetState(() {});
-                    },
-                    style: const TextStyle(color: Colors.white),
-                    decoration: InputDecoration(
-                      labelText: 'Raw reason',
-                      hintText:
-                          'Example: I was exhausted after school and kept scrolling instead of starting.',
-                      labelStyle: const TextStyle(color: Colors.white70),
-                      hintStyle: const TextStyle(color: Color(0xFF777780)),
-                      filled: true,
-                      fillColor: const Color(0xFF101013),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(14),
-                        borderSide: const BorderSide(color: Color(0xFF2A2A2F)),
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(14),
-                        borderSide: const BorderSide(color: Color(0xFF2A2A2F)),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(14),
-                        borderSide: const BorderSide(color: Color(0xFFF5F5F5)),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 7),
-                  Text(
-                    '$reasonLength/$minReasonLength minimum characters',
-                    style: TextStyle(
-                      color: canSaveReason
-                          ? const Color(0xFF81C784)
-                          : const Color(0xFF9A9AA3),
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF101013),
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: const Color(0xFF232329)),
-                    ),
-                    child: SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      value: shareWithPartners,
-                      onChanged: (value) {
-                        setSheetState(() {
-                          shareWithPartners = value;
-                        });
-                      },
-                      activeThumbColor: const Color(0xFFF5F5F5),
-                      title: const Text(
-                        'Share with accountability partners',
+            return Padding(
+              padding: EdgeInsets.fromLTRB(
+                16,
+                16,
+                16,
+                MediaQuery.of(modalContext).viewInsets.bottom + 20,
+              ),
+              child: SingleChildScrollView(
+                keyboardDismissBehavior:
+                    ScrollViewKeyboardDismissBehavior.onDrag,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Center(
+                      child: Text(
+                        'Tell BRIGHT what happened',
                         style: TextStyle(
                           color: Color(0xFFF5F5F5),
+                          fontSize: 20,
                           fontWeight: FontWeight.w800,
                         ),
                       ),
-                      subtitle: const Text(
-                        'Your raw reason will be visible to accepted accountability partners.',
-                        style: TextStyle(
-                          color: Color(0xFF9A9AA3),
-                          height: 1.35,
+                    ),
+                    const SizedBox(height: 10),
+                    Center(
+                      child: Text(
+                        'You missed $habitTitle. Your reason helps BRIGHT understand whether this was a one-off miss or a system problem.',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Color(0xFFB3B3BB),
+                          height: 1.4,
                         ),
                       ),
                     ),
-                  ),
-                  const SizedBox(height: 16),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      onPressed: canSaveReason
-                          ? () {
-                              Navigator.pop(sheetContext, true);
-                            }
-                          : null,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFFF5F5F5),
-                        foregroundColor: Colors.black,
-                        disabledBackgroundColor: const Color(0xFF2A2A2F),
-                        disabledForegroundColor: const Color(0xFF777780),
-                        elevation: 0,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(
+                    const SizedBox(height: 18),
+                    const Text(
+                      'Main reason',
+                      style: TextStyle(
+                        color: Color(0xFFF5F5F5),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: _missReasonOptions.map((option) {
+                        final value = option['value']!;
+                        final label = option['label']!;
+                        final selected = selectedReason == value;
+
+                        return ChoiceChip(
+                          label: Text(label),
+                          selected: selected,
+                          onSelected: (_) {
+                            setSheetState(() {
+                              selectedReason = value;
+                            });
+                          },
+                          selectedColor: const Color(0xFFF5F5F5),
+                          backgroundColor: const Color(0xFF101013),
+                          labelStyle: TextStyle(
+                            color: selected
+                                ? Colors.black
+                                : const Color(0xFFF5F5F5),
+                            fontWeight: FontWeight.w700,
+                          ),
+                          side: const BorderSide(color: Color(0xFF2A2A2F)),
+                        );
+                      }).toList(),
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: noteController,
+                      maxLines: 4,
+                      onChanged: (_) {
+                        setSheetState(() {});
+                      },
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        labelText: 'Raw reason',
+                        hintText:
+                            'Example: I was exhausted after school and kept scrolling instead of starting.',
+                        labelStyle: const TextStyle(color: Colors.white70),
+                        hintStyle: const TextStyle(color: Color(0xFF777780)),
+                        filled: true,
+                        fillColor: const Color(0xFF101013),
+                        border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(14),
+                          borderSide:
+                              const BorderSide(color: Color(0xFF2A2A2F)),
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(14),
+                          borderSide:
+                              const BorderSide(color: Color(0xFF2A2A2F)),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(14),
+                          borderSide:
+                              const BorderSide(color: Color(0xFFF5F5F5)),
                         ),
                       ),
-                      child: const Text(
-                        'Save Reason',
-                        style: TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                    const SizedBox(height: 7),
+                    Text(
+                      '$reasonLength/$minReasonLength minimum characters',
+                      style: TextStyle(
+                        color: canSaveReason
+                            ? const Color(0xFF81C784)
+                            : const Color(0xFF9A9AA3),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
                       ),
                     ),
-                  ),
-                ],
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF101013),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: const Color(0xFF232329)),
+                      ),
+                      child: SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        value: shareWithPartners,
+                        onChanged: (value) {
+                          setSheetState(() {
+                            shareWithPartners = value;
+                          });
+                        },
+                        activeThumbColor: const Color(0xFFF5F5F5),
+                        title: const Text(
+                          'Share with accountability partners',
+                          style: TextStyle(
+                            color: Color(0xFFF5F5F5),
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        subtitle: const Text(
+                          'Your raw reason will be visible to accepted accountability partners.',
+                          style: TextStyle(
+                            color: Color(0xFF9A9AA3),
+                            height: 1.35,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: canSaveReason
+                            ? () {
+                                FocusManager.instance.primaryFocus?.unfocus();
+
+                                if (!modalContext.mounted) return;
+                                Navigator.of(modalContext).pop(true);
+                              }
+                            : null,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFFF5F5F5),
+                          foregroundColor: Colors.black,
+                          disabledBackgroundColor: const Color(0xFF2A2A2F),
+                          disabledForegroundColor: const Color(0xFF777780),
+                          elevation: 0,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                        ),
+                        child: const Text(
+                          'Save Reason',
+                          style: TextStyle(fontWeight: FontWeight.w900),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
-          );
-        },
-      );
-    },
-  );
+            );
+          },
+        );
+      },
+    );
 
-  if (submitted != true) {
-    noteController.dispose();
-    return;
-  }
+    if (submitted != true) return;
 
-  final rawReason = noteController.text.trim();
-  noteController.dispose();
+    final rawReason = noteController.text.trim();
+    if (rawReason.length < minReasonLength) return;
 
-  if (rawReason.isEmpty) return;
-
-  try {
     final eventId = await _findOpenBrightEventIdForLog(
       userId: user.id,
       logId: logId,
@@ -463,28 +506,25 @@ Future<void> _openMissedReasonSheet(Map<String, dynamic> log) async {
       shareWithPartners: shareWithPartners,
     );
 
+    if (!mounted) return;
+
     await _loadTodayData();
 
     if (!mounted) return;
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          shareWithPartners
-              ? 'Reason saved and shared with accountability partners.'
-              : 'Reason saved privately for BRIGHT.',
-        ),
-      ),
+    _showSnack(
+      shareWithPartners
+          ? 'Reason saved and shared with accountability partners.'
+          : 'Reason saved privately for BRIGHT.',
     );
   } catch (e, st) {
     debugPrint('SAVE MISSED REASON ERROR: $e');
     debugPrint('$st');
 
     if (!mounted) return;
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Failed to save reason: $e')),
-    );
+    _showSnack('Failed to save reason: $e');
+  } finally {
+    noteController.dispose();
   }
 }
 
@@ -664,297 +704,279 @@ Future<void> _openMissedReasonSheet(Map<String, dynamic> log) async {
   }
 
   Future<bool> _ensurePinnedLocationConfiguredForLog(
-    Map<String, dynamic> log,
-  ) async {
-    final verificationType = _verificationType(log);
-    if (!_needsLocationVerification(verificationType)) {
-      return true;
-    }
-
-    final habitId = _extractHabitId(log);
-    final habitTitle = _extractHabitTitle(log);
-
-    if (habitId == null || habitId.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('This task is missing a habit id.')),
-      );
-      return false;
-    }
-
-    final config = await _habitLocationService.fetchHabitLocationConfig(
-      habitId: habitId,
-    );
-
-    if (config != null) {
-      return true;
-    }
-
-    if (!mounted) return false;
-
-    final shouldConfigure = await showModalBottomSheet<bool>(
-      context: context,
-      backgroundColor: const Color(0xFF17171A),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (_) {
-        return SafeArea(
-          top: false,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text(
-                  'Location setup required',
-                  style: TextStyle(
-                    color: Color(0xFFF5F5F5),
-                    fontSize: 20,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  '$habitTitle uses location-based verification. Set the pinned place first before starting or submitting this task.',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    color: Color(0xFFB3B3BB),
-                    height: 1.4,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: () => Navigator.pop(context, true),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFFF5F5F5),
-                      foregroundColor: Colors.black,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                    ),
-                    child: const Text('Set location'),
-                  ),
-                ),
-                const SizedBox(height: 10),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton(
-                    onPressed: () => Navigator.pop(context, false),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: const Color(0xFFF5F5F5),
-                      side: const BorderSide(color: Color(0xFF3A3A42)),
-                    ),
-                    child: const Text('Cancel'),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-
-    if (shouldConfigure != true) {
-      return false;
-    }
-
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => SetHabitLocationScreen(
-          habitId: habitId,
-          habitTitle: habitTitle,
-          verificationType: verificationType,
-        ),
-      ),
-    );
-
-    if (!mounted) return false;
-
-    final updatedConfig = await _habitLocationService.fetchHabitLocationConfig(
-      habitId: habitId,
-    );
-
-    if (updatedConfig == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Pinned location is still required for this task.'),
-        ),
-      );
-      return false;
-    }
-
+  Map<String, dynamic> log,
+) async {
+  final verificationType = _verificationType(log);
+  if (!_needsLocationVerification(verificationType)) {
     return true;
   }
 
-  Future<void> _markLogDone(Map<String, dynamic> log) async {
-    final logId = log['log_id']?.toString();
-    final habitId = _extractHabitId(log);
-    final user = supabase.auth.currentUser;
+  final habitId = _extractHabitId(log);
+  final habitTitle = _extractHabitTitle(log);
 
-    if (logId == null || logId.isEmpty) return;
-    if (habitId == null || habitId.isEmpty) return;
-    if (user == null) return;
-
-    final availability = _manualCompletionAvailability(log);
-    if (!availability.canCompleteNow) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(availability.message)),
-      );
-      return;
-    }
-
-    try {
-      setState(() {
-        _isUpdatingLog = true;
-      });
-
-      await _habitLogService.markLogDone(logId: logId);
-
-      final habit = log['habits'];
-      final basePoints = (() {
-        if (habit is Map<String, dynamic>) {
-          final raw = habit['base_points'];
-          if (raw is int) return raw;
-          if (raw is double) return raw.round();
-          return int.tryParse('${raw ?? ''}') ?? 0;
-        }
-        if (habit is Map) {
-          final raw = habit['base_points'];
-          if (raw is int) return raw;
-          if (raw is double) return raw.round();
-          return int.tryParse('${raw ?? ''}') ?? 0;
-        }
-        return int.tryParse('${log['base_points'] ?? ''}') ?? 0;
-      })();
-
-      final verificationType = _verificationType(log);
-
-      await _pointsService.applyCompletionPoints(
-        userId: user.id,
-        logId: logId,
-        habitId: habitId,
-        basePoints: basePoints,
-        verificationType: verificationType,
-      );
-
-      await _badgeService.evaluateAndAwardCoreBadges(userId: user.id);
-
-      await _loadTodayData();
-
-      if (!mounted) return;
-
-      final awarded = _pointsService.calculateCompletionAward(
-        basePoints: basePoints,
-        verificationType: verificationType,
-      );
-
-      PointsDeltaOverlay.show(context, delta: awarded);
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Habit marked as done. +$awarded points')),
-      );
-    } catch (e, st) {
-      debugPrint('MARK LOG DONE ERROR: $e');
-      debugPrint('$st');
-
-      if (!mounted) return;
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to mark habit as done: $e')),
-      );
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isUpdatingLog = false;
-        });
-      }
-    }
+  if (habitId == null || habitId.isEmpty) {
+    _showSnack('This task is missing a habit id.');
+    return false;
   }
 
-  Future<void> _openFocusMode(Map<String, dynamic> log) async {
-    final status = (log['status'] ?? '').toString();
+  final config = await _habitLocationService.fetchHabitLocationConfig(
+    habitId: habitId,
+  );
 
-    const blockedStatuses = {
-      'done',
-      'failed',
-      'missed',
-      'rejected',
-      'submitted',
-    };
+  if (config != null) {
+    return true;
+  }
 
-    if (blockedStatuses.contains(status)) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'This task is already closed with status: $status.',
+  if (!mounted) return false;
+
+  final shouldConfigure = await _showAchievrBottomSheet<bool>(
+    builder: (modalContext) {
+      return SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Location setup required',
+                style: TextStyle(
+                  color: Color(0xFFF5F5F5),
+                  fontSize: 20,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                '$habitTitle uses location-based verification. Set the pinned place first before starting or submitting this task.',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Color(0xFFB3B3BB),
+                  height: 1.4,
+                ),
+              ),
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: () {
+                    if (!modalContext.mounted) return;
+                    Navigator.of(modalContext).pop(true);
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFF5F5F5),
+                    foregroundColor: Colors.black,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                  child: const Text('Set location'),
+                ),
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton(
+                  onPressed: () {
+                    if (!modalContext.mounted) return;
+                    Navigator.of(modalContext).pop(false);
+                  },
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFFF5F5F5),
+                    side: const BorderSide(color: Color(0xFF3A3A42)),
+                  ),
+                  child: const Text('Cancel'),
+                ),
+              ),
+            ],
           ),
         ),
       );
-      return;
-    }
+    },
+  );
 
-    final hasLocationConfig = await _ensurePinnedLocationConfiguredForLog(log);
-    if (!hasLocationConfig) return;
-
-    final controller = ref.read(focusRuntimeControllerProvider);
-    final requestedLogId = log['log_id']?.toString();
-
-    if (!controller.isSameActiveLog(requestedLogId)) {
-      await controller.attachToLog(log);
-    }
-
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => FocusModeScreen(log: log),
-      ),
-    );
-
-    if (!mounted) return;
-    await _loadTodayData();
+  if (shouldConfigure != true) {
+    return false;
   }
 
-  Future<void> _submitPartnerVerification(Map<String, dynamic> log) async {
-    final logId = log['log_id']?.toString();
-    final habitId = _extractHabitId(log);
+  if (!mounted) return false;
+
+  await _pushAchievrRoute(
+    MaterialPageRoute(
+      builder: (_) => SetHabitLocationScreen(
+        habitId: habitId,
+        habitTitle: habitTitle,
+        verificationType: verificationType,
+      ),
+    ),
+  );
+
+  if (!mounted) return false;
+
+  final updatedConfig = await _habitLocationService.fetchHabitLocationConfig(
+    habitId: habitId,
+  );
+
+  if (updatedConfig == null) {
+    _showSnack('Pinned location is still required for this task.');
+    return false;
+  }
+
+  return true;
+}
+
+Future<void> _markLogDone(Map<String, dynamic> log) async {
+  final logId = log['log_id']?.toString();
+  final habitId = _extractHabitId(log);
+  final user = supabase.auth.currentUser;
+
+  if (logId == null || logId.isEmpty) return;
+  if (habitId == null || habitId.isEmpty) return;
+  if (user == null) return;
+
+  final availability = _manualCompletionAvailability(log);
+
+  if (!availability.canCompleteNow) {
+    _showSnack(availability.message);
+    return;
+  }
+
+  try {
+    if (!mounted) return;
+
+    setState(() {
+      _isUpdatingLog = true;
+    });
+
+    await _habitLogService.markLogDone(logId: logId);
+
+    final habit = log['habits'];
+    final basePoints = (() {
+      if (habit is Map<String, dynamic>) {
+        final raw = habit['base_points'];
+        if (raw is int) return raw;
+        if (raw is double) return raw.round();
+        return int.tryParse('${raw ?? ''}') ?? 0;
+      }
+
+      if (habit is Map) {
+        final raw = habit['base_points'];
+        if (raw is int) return raw;
+        if (raw is double) return raw.round();
+        return int.tryParse('${raw ?? ''}') ?? 0;
+      }
+
+      return int.tryParse('${log['base_points'] ?? ''}') ?? 0;
+    })();
+
     final verificationType = _verificationType(log);
 
-    if (logId == null || habitId == null) return;
+    await _pointsService.applyCompletionPoints(
+      userId: user.id,
+      logId: logId,
+      habitId: habitId,
+      basePoints: basePoints,
+      verificationType: verificationType,
+    );
 
-    final availability = _manualCompletionAvailability(log);
-    if (!availability.canCompleteNow) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(availability.message)),
-      );
-      return;
+    await _badgeService.evaluateAndAwardCoreBadges(userId: user.id);
+
+    await _loadTodayData();
+
+    if (!mounted) return;
+
+    final awarded = _pointsService.calculateCompletionAward(
+      basePoints: basePoints,
+      verificationType: verificationType,
+    );
+
+    _showPointsDelta(awarded);
+    _showSnack('Habit marked as done. +$awarded points');
+  } catch (e, st) {
+    debugPrint('MARK LOG DONE ERROR: $e');
+    debugPrint('$st');
+
+    if (!mounted) return;
+    _showSnack('Failed to mark habit as done: $e');
+  } finally {
+    if (mounted) {
+      setState(() {
+        _isUpdatingLog = false;
+      });
     }
+  }
+}
 
-    final hasLocationConfig = await _ensurePinnedLocationConfiguredForLog(log);
-    if (!hasLocationConfig) return;
+Future<void> _openFocusMode(Map<String, dynamic> log) async {
+  final status = (log['status'] ?? '').toString();
 
-    final bool requiresLocation = verificationType == 'location_partner' ||
-        verificationType == 'location_focus_partner';
+  const blockedStatuses = {
+    'done',
+    'failed',
+    'missed',
+    'rejected',
+    'submitted',
+  };
 
-    final noteController = TextEditingController();
+  if (blockedStatuses.contains(status)) {
+    _showSnack('This task is already closed with status: $status.');
+    return;
+  }
 
-    final bool? confirmed = await showModalBottomSheet<bool>(
-      context: context,
+  final hasLocationConfig = await _ensurePinnedLocationConfiguredForLog(log);
+  if (!hasLocationConfig) return;
+
+  final controller = ref.read(focusRuntimeControllerProvider);
+  final requestedLogId = log['log_id']?.toString();
+
+  if (!controller.isSameActiveLog(requestedLogId)) {
+    await controller.attachToLog(log);
+  }
+
+  if (!mounted) return;
+
+  await _pushAchievrRoute(
+    MaterialPageRoute(
+      builder: (_) => FocusModeScreen(log: log),
+    ),
+  );
+
+  if (!mounted) return;
+  await _loadTodayData();
+}
+
+Future<void> _submitPartnerVerification(Map<String, dynamic> log) async {
+  final logId = log['log_id']?.toString();
+  final habitId = _extractHabitId(log);
+  final verificationType = _verificationType(log);
+
+  if (logId == null || habitId == null) return;
+
+  final availability = _manualCompletionAvailability(log);
+  if (!availability.canCompleteNow) {
+    _showSnack(availability.message);
+    return;
+  }
+
+  final hasLocationConfig = await _ensurePinnedLocationConfiguredForLog(log);
+  if (!hasLocationConfig) return;
+
+  final requiresLocation = verificationType == 'location_partner' ||
+      verificationType == 'location_focus_partner';
+
+  final noteController = TextEditingController();
+
+  try {
+    final confirmed = await _showAchievrBottomSheet<bool>(
       isScrollControlled: true,
-      backgroundColor: const Color(0xFF17171A),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (_) {
+      builder: (modalContext) {
         return Padding(
           padding: EdgeInsets.fromLTRB(
             16,
             16,
             16,
-            MediaQuery.of(context).viewInsets.bottom + 20,
+            MediaQuery.of(modalContext).viewInsets.bottom + 20,
           ),
           child: SingleChildScrollView(
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -1016,7 +1038,12 @@ Future<void> _openMissedReasonSheet(Map<String, dynamic> log) async {
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton(
-                    onPressed: () => Navigator.pop(context, true),
+                    onPressed: () {
+                      FocusManager.instance.primaryFocus?.unfocus();
+
+                      if (!modalContext.mounted) return;
+                      Navigator.of(modalContext).pop(true);
+                    },
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFFF5F5F5),
                       foregroundColor: Colors.black,
@@ -1034,48 +1061,48 @@ Future<void> _openMissedReasonSheet(Map<String, dynamic> log) async {
 
     if (confirmed != true) return;
 
+    if (!mounted) return;
+
+    setState(() {
+      _isSubmittingVerification = true;
+    });
+
     Position? position;
 
-    try {
+    if (requiresLocation) {
+      position = await _requireCurrentPosition();
+    }
+
+    await _verificationService.submitLogForVerification(
+      logId: logId,
+      habitId: habitId,
+      note: noteController.text.trim().isEmpty
+          ? null
+          : noteController.text.trim(),
+      currentLatitude: position?.latitude,
+      currentLongitude: position?.longitude,
+    );
+
+    await _loadTodayData();
+
+    if (!mounted) return;
+    _showSnack('Submitted for verification.');
+  } catch (e, st) {
+    debugPrint('SUBMIT PARTNER VERIFICATION ERROR: $e');
+    debugPrint('$st');
+
+    if (!mounted) return;
+    _showSnack('Failed to submit verification: $e');
+  } finally {
+    noteController.dispose();
+
+    if (mounted) {
       setState(() {
-        _isSubmittingVerification = true;
+        _isSubmittingVerification = false;
       });
-
-      if (requiresLocation) {
-        position = await _requireCurrentPosition();
-      }
-
-      await _verificationService.submitLogForVerification(
-        logId: logId,
-        habitId: habitId,
-        note: noteController.text.trim().isEmpty
-            ? null
-            : noteController.text.trim(),
-        currentLatitude: position?.latitude,
-        currentLongitude: position?.longitude,
-      );
-
-      await _loadTodayData();
-
-      if (!mounted) return;
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Submitted for verification.')),
-      );
-    } catch (e) {
-      if (!mounted) return;
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to submit verification: $e')),
-      );
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isSubmittingVerification = false;
-        });
-      }
     }
   }
+}
 
   String get _username {
     final username = profile?['username'];

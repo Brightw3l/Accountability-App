@@ -1,4 +1,5 @@
 import 'package:achievr_app/Services/app_clock.dart';
+import 'package:achievr_app/Services/verification_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class HabitLogService {
@@ -324,22 +325,77 @@ class HabitLogService {
   Future<void> markLogSubmitted({
     required String logId,
   }) async {
+    final logResponse = await _supabase
+        .from('habit_logs')
+        .select('''
+          log_id,
+          habit_id,
+          user_id,
+          verification_type
+        ''')
+        .eq('log_id', logId)
+        .maybeSingle();
+
+    if (logResponse == null) {
+      throw Exception('Habit log not found.');
+    }
+
+    final log = Map<String, dynamic>.from(logResponse);
+    final habitId = log['habit_id']?.toString();
+
+    if (habitId == null || habitId.isEmpty) {
+      throw Exception('Habit log is missing habit_id.');
+    }
+
+    final habitResponse = await _supabase
+        .from('habits')
+        .select('''
+          habit_id,
+          verification_type,
+          requires_verifier
+        ''')
+        .eq('habit_id', habitId)
+        .maybeSingle();
+
+    if (habitResponse == null) {
+      throw Exception('Habit not found for submitted log.');
+    }
+
+    final habit = Map<String, dynamic>.from(habitResponse);
+
+    final logVerificationType =
+        (log['verification_type'] ?? '').toString().trim();
+
+    final habitVerificationType =
+        (habit['verification_type'] ?? '').toString().trim();
+
+    final verificationType =
+        habitVerificationType.isNotEmpty ? habitVerificationType : logVerificationType;
+
+    final requiresVerifier = habit['requires_verifier'] == true;
+
+    final needsPartnerReview = requiresVerifier ||
+        verificationType == 'partner' ||
+        verificationType == 'focus_partner' ||
+        verificationType == 'location_partner' ||
+        verificationType == 'location_focus_partner';
+
+    if (needsPartnerReview) {
+      final verificationService = VerificationService();
+
+      await verificationService.ensurePartnerVerificationRequestForLog(
+        logId: logId,
+        habitId: habitId,
+        note: 'Submitted for partner review.',
+      );
+
+      return;
+    }
+
     await _supabase
         .from('habit_logs')
         .update({
           'status': 'submitted',
-          'submitted_at': AppClock.now().toIso8601String(),
-        })
-        .eq('log_id', logId);
-  }
-
-  Future<void> markLogPendingVerification({
-    required String logId,
-  }) async {
-    await _supabase
-        .from('habit_logs')
-        .update({
-          'status': 'pending_verification',
           'submitted_at': AppClock.now().toIso8601String(),
         })
         .eq('log_id', logId);

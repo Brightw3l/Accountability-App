@@ -250,7 +250,7 @@ class _SetHabitLocationScreenState extends State<SetHabitLocationScreen> {
     }
 
     final confirmed = await _confirmFirstPin();
-    if (!confirmed) return;
+    if (!mounted || !confirmed) return;
 
     try {
       setState(() {
@@ -329,7 +329,7 @@ class _SetHabitLocationScreenState extends State<SetHabitLocationScreen> {
       },
     );
 
-    if (confirmed != true) return;
+    if (!mounted || confirmed != true) return;
 
     try {
       setState(() {
@@ -632,7 +632,9 @@ class _SetHabitLocationScreenState extends State<SetHabitLocationScreen> {
         SizedBox(
           width: double.infinity,
           child: OutlinedButton(
-            onPressed: (_isSaving || _isDeleting || _isLocked) ? null : _remove,
+            onPressed: (_isSaving || _isDeleting || _isLocked || _existingConfig == null)
+              ? null
+              : _remove,
             style: OutlinedButton.styleFrom(
               foregroundColor: const Color(0xFFFF8A80),
               side: const BorderSide(color: Color(0xFFFF8A80)),
@@ -643,7 +645,9 @@ class _SetHabitLocationScreenState extends State<SetHabitLocationScreen> {
                   ? 'Removing...'
                   : _isLocked
                       ? 'Pinned location locked'
-                      : 'Remove Pinned Location',
+                      : _existingConfig == null
+                          ? 'No pinned location to remove'
+                          : 'Remove Pinned Location',
             ),
           ),
         ),

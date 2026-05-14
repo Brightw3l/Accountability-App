@@ -4,11 +4,9 @@ import 'package:achievr_app/Screens/Social/focus_policy_settings_screen.dart';
 import 'package:achievr_app/Screens/Social/set_habit_location_screen.dart';
 import 'package:achievr_app/Services/friends_service.dart';
 import 'package:achievr_app/Services/habit_location_service.dart';
-import 'package:achievr_app/Services/points_service.dart';
-import 'package:achievr_app/Services/verification_service.dart';
-import 'package:achievr_app/Widgets/points_feedback.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:achievr_app/Screens/Social/verification_request_detail_screen.dart';
 
 class VerificationSettingsScreen extends StatefulWidget {
   const VerificationSettingsScreen({super.key});
@@ -24,8 +22,6 @@ class _VerificationSettingsScreenState
   final SupabaseClient _supabase = Supabase.instance.client;
   final FriendsService _friendsService = FriendsService();
   final HabitLocationService _habitLocationService = HabitLocationService();
-  final VerificationService _verificationService = VerificationService();
-  final PointsService _pointsService = PointsService();
 
   late TabController _tabController;
 
@@ -379,7 +375,7 @@ class _VerificationSettingsScreenState
         'requester_profile': requester,
         'verifier_profile': verifier,
         'habit_title': habit?['title']?.toString() ?? 'Untitled Habit',
-        'goal_title': goal?['title']?.toString() ?? 'Unknown Goal',
+        'goal_title': goal?['title']?.toString() ?? '',
         'log_meta': log,
       };
     }).toList();
@@ -688,105 +684,25 @@ class _VerificationSettingsScreenState
     }
   }
 
-  Future<void> _reviewRequest({
-    required Map<String, dynamic> request,
-    required bool approve,
-  }) async {
+  Future<void> _openVerificationRequestDetails(
+    Map<String, dynamic> request,
+  ) async {
     final requestId = request['request_id']?.toString();
-    final logId = request['log_id']?.toString();
-    final habitId = request['habit_id']?.toString();
-    final requesterUserId = request['requester_user_id']?.toString();
+    if (requestId == null || requestId.isEmpty) return;
 
-    if (requestId == null || logId == null) return;
-
-    try {
-      setState(() {
-        _isSaving = true;
-      });
-
-      if (approve) {
-        await _verificationService.approveVerificationRequest(
+    final changed = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => VerificationRequestDetailScreen(
           requestId: requestId,
-          logId: logId,
-        );
-      } else {
-        await _verificationService.rejectVerificationRequest(
-          requestId: requestId,
-          logId: logId,
-        );
-      }
-
-      await _loadHubData();
-
-      if (!mounted) return;
-
-      if (requesterUserId != null &&
-          requesterUserId.isNotEmpty &&
-          habitId != null &&
-          habitId.isNotEmpty) {
-        final habitRows = await _supabase
-            .from('habits')
-            .select('base_points, penalty_points, verification_type')
-            .eq('habit_id', habitId)
-            .limit(1);
-
-        final habit = habitRows.isNotEmpty
-            ? Map<String, dynamic>.from(habitRows.first as Map)
-            : <String, dynamic>{};
-
-        if (approve) {
-          final basePoints = (() {
-            final raw = habit['base_points'];
-            if (raw is int) return raw;
-            if (raw is double) return raw.round();
-            return int.tryParse('${raw ?? ''}') ?? 0;
-          })();
-
-          final verificationType =
-              (habit['verification_type'] ?? 'partner').toString();
-
-          final awarded = _pointsService.calculateCompletionAward(
-            basePoints: basePoints,
-            verificationType: verificationType,
-          );
-
-          PointsDeltaOverlay.show(context, delta: awarded);
-        } else {
-          final penaltyPoints = (() {
-            final raw = habit['penalty_points'];
-            if (raw is int) return raw;
-            if (raw is double) return raw.round();
-            return int.tryParse('${raw ?? ''}') ?? 0;
-          })();
-
-          final penaltyDelta = _pointsService.calculatePenalty(
-            penaltyPoints: penaltyPoints,
-            penaltyReason: 'rejected',
-          );
-
-          PointsDeltaOverlay.show(context, delta: penaltyDelta);
-        }
-      }
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            approve ? 'Verification approved.' : 'Verification rejected.',
-          ),
         ),
-      );
-    } catch (e) {
-      if (!mounted) return;
+      ),
+    );
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to review request: $e')),
-      );
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isSaving = false;
-        });
-      }
+    if (!mounted) return;
+
+    if (changed == true) {
+      await _loadHubData();
     }
   }
 
@@ -1149,109 +1065,109 @@ class _VerificationSettingsScreenState
 
   Widget _buildInboxCard(Map<String, dynamic> request, {bool reviewed = false}) {
     final requester = request['requester_profile'] as Map<String, dynamic>?;
-    final requesterName = (requester?['username'] ?? 'Unknown').toString();
+    final requesterName = (requester?['username'] ??
+            requester?['public_handle'] ??
+            'Unknown user')
+        .toString();
 
     final scheduled = request['log_meta'] as Map<String, dynamic>?;
     final start = scheduled?['scheduled_start']?.toString();
     final end = scheduled?['scheduled_end']?.toString();
+    final logDate = scheduled?['log_date']?.toString();
 
-    return Container(
-      margin: const EdgeInsets.only(top: 10),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFF101013),
+    final goalTitle = (request['goal_title'] ?? '').toString().trim();
+    final status = (request['status'] ?? 'pending').toString();
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => _openVerificationRequestDetails(request),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFF232329)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+        child: Container(
+          margin: const EdgeInsets.only(top: 10),
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: const Color(0xFF101013),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: const Color(0xFF232329)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(
-                child: Text(
-                  request['habit_title']?.toString() ?? 'Untitled Habit',
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      request['habit_title']?.toString() ?? 'Untitled Habit',
+                      style: const TextStyle(
+                        color: Color(0xFFF5F5F5),
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  _buildStatusChip(status),
+                ],
+              ),
+              const SizedBox(height: 5),
+              Text(
+                goalTitle.isNotEmpty
+                    ? '$goalTitle • $requesterName'
+                    : requesterName,
+                style: const TextStyle(
+                  color: Color(0xFF9A9AA3),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              if (logDate != null || (start != null && end != null)) ...[
+                const SizedBox(height: 8),
+                Text(
+                  [
+                    if (logDate != null) logDate,
+                    if (start != null && end != null) '$start → $end',
+                  ].join(' • '),
                   style: const TextStyle(
-                    color: Color(0xFFF5F5F5),
-                    fontSize: 15,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-              _buildStatusChip((request['status'] ?? 'pending').toString()),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Text(
-            '${request['goal_title']?.toString() ?? 'Unknown Goal'} • $requesterName',
-            style: const TextStyle(
-              color: Color(0xFF9A9AA3),
-              fontSize: 12,
-            ),
-          ),
-          if (start != null && end != null) ...[
-            const SizedBox(height: 8),
-            Text(
-              'Scheduled window: $start → $end',
-              style: const TextStyle(
-                color: Color(0xFFB3B3BB),
-                fontSize: 12,
-              ),
-            ),
-          ],
-          if ((request['note'] ?? '').toString().trim().isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Text(
-              'Note: ${(request['note'] ?? '').toString()}',
-              style: const TextStyle(
-                color: Color(0xFFB3B3BB),
-                fontSize: 12,
-                height: 1.35,
-              ),
-            ),
-          ],
-          if (!reviewed && (request['status'] ?? '') == 'pending') ...[
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: _isSaving
-                        ? null
-                        : () => _reviewRequest(
-                              request: request,
-                              approve: false,
-                            ),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: const Color(0xFFFF8A80),
-                      side: const BorderSide(color: Color(0xFFFF8A80)),
-                    ),
-                    child: const Text('Reject'),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: _isSaving
-                        ? null
-                        : () => _reviewRequest(
-                              request: request,
-                              approve: true,
-                            ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFFF5F5F5),
-                      foregroundColor: Colors.black,
-                    ),
-                    child: const Text(
-                      'Approve',
-                      style: TextStyle(fontWeight: FontWeight.w700),
-                    ),
+                    color: Color(0xFFB3B3BB),
+                    fontSize: 12,
                   ),
                 ),
               ],
-            ),
-          ],
-        ],
+              if ((request['note'] ?? '').toString().trim().isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Text(
+                  (request['note'] ?? '').toString(),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xFF8F8F99),
+                    fontSize: 12,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      'Tap to review details',
+                      style: TextStyle(
+                        color: Color(0xFF70707A),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  const Icon(
+                    Icons.chevron_right_rounded,
+                    color: Color(0xFF9A9AA3),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

@@ -13,6 +13,7 @@ import 'package:achievr_app/Services/verification_service.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:achievr_app/Services/app_clock.dart';
 
 class FocusRuntimeViewState {
   final bool isInitialized;
@@ -76,12 +77,13 @@ class FocusRuntimeViewState {
     );
   }
 
-  bool get hasLiveSession {
-    final phase = engineState?.phase;
-    return phase == FocusSessionPhase.running ||
-        phase == FocusSessionPhase.violationDebounce ||
-        phase == FocusSessionPhase.grace;
-  }
+    bool get hasLiveSession {
+      final phase = engineState?.phase;
+
+      return phase == FocusSessionPhase.running ||
+          phase == FocusSessionPhase.violationDebounce ||
+          phase == FocusSessionPhase.grace;
+    }
 
   String get phaseLabel {
     switch (engineState?.phase) {
@@ -163,7 +165,7 @@ class FocusSessionRuntimeController extends ChangeNotifier
             locationRuntimeService ?? LocationRuntimeService() {
     WidgetsBinding.instance.addObserver(this);
     _lastLifecycleState = AppLifecycleState.resumed;
-    _lastLifecycleChangeAt = DateTime.now();
+    _lastLifecycleChangeAt = AppClock.now();
   }
 
   final FocusRuntimeService _focusRuntimeService;
@@ -216,7 +218,7 @@ class FocusSessionRuntimeController extends ChangeNotifier
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _lastLifecycleState = state;
-    _lastLifecycleChangeAt = DateTime.now();
+    _lastLifecycleChangeAt = AppClock.now();
   }
 
   bool get _isAchievrForeground {
@@ -238,7 +240,7 @@ class FocusSessionRuntimeController extends ChangeNotifier
     required bool isScreenOff,
   }) {
     final normalized = FocusSessionEngine.normalizeAppId(rawForegroundAppId);
-    final now = DateTime.now();
+    final now = AppClock.now();
 
     if (_isAchievrForeground) {
       _lastStableForegroundAppId = 'com.example.achievr_app';
@@ -349,7 +351,7 @@ class FocusSessionRuntimeController extends ChangeNotifier
         locationConfig: locationConfig,
       );
 
-      final now = DateTime.now();
+      final now = AppClock.now();
       final initialSnapshot = FocusRuntimeSnapshot(
         capturedAt: now,
         foregroundAppId: 'com.example.achievr_app',
@@ -450,7 +452,7 @@ class FocusSessionRuntimeController extends ChangeNotifier
       if (allowed) {
         try {
           _latestPosition = await _locationRuntimeService.getCurrentPosition();
-          _lastLocationRefreshAt = DateTime.now();
+          _lastLocationRefreshAt = AppClock.now();
         } catch (_) {}
       }
 
@@ -516,7 +518,7 @@ class FocusSessionRuntimeController extends ChangeNotifier
 
     return FocusSessionEngine(
       policy: policy,
-      startedAt: DateTime.now(),
+      startedAt: AppClock.now(),
       locationTarget: locationTarget,
     );
   }
@@ -527,68 +529,70 @@ class FocusSessionRuntimeController extends ChangeNotifier
     return double.tryParse('${value ?? ''}');
   }
 
-  Future<void> startSessionForAttachedLog() async {
-    if (!_supportsNativeFocusRuntime) {
-      throw Exception(
-        'Live Focus Mode is currently supported on Android only. '
-        'Use an Android phone or Android emulator.',
-      );
+    Future<void> startSessionForAttachedLog() async {
+      if (!_supportsNativeFocusRuntime) {
+        throw Exception(
+          'Live Focus Mode is currently supported on Android only. '
+          'Use an Android phone or Android emulator.',
+        );
+      }
+
+      final logId = _state.logId;
+      final habitId = _state.habitId;
+
+      if (logId == null || habitId == null) {
+        throw Exception('Missing log or habit id.');
+      }
+
+      try {
+        final now = AppClock.now();
+
+        final started = await _focusRuntimeService.startFocusSession(
+          logId: logId,
+          habitId: habitId,
+          currentLatitude: _latestPosition?.latitude,
+          currentLongitude: _latestPosition?.longitude,
+          initialForegroundAppIdentifier: 'com.example.achievr_app',
+          isScreenOff: false,
+        );
+
+        final snapshot = FocusRuntimeSnapshot(
+          capturedAt: now,
+          foregroundAppId: 'com.example.achievr_app',
+          isScreenOff: false,
+          latitude: _latestPosition?.latitude,
+          longitude: _latestPosition?.longitude,
+        );
+
+        _engine ??= _buildEngine(
+          habit: _state.habit,
+          policySnapshot: _state.policySnapshot,
+          locationConfig: _state.locationConfig,
+        );
+
+        final result = _engine!.start(snapshot);
+
+        _lastStableForegroundAppId = 'com.example.achievr_app';
+
+        _state = _state.copyWith(
+          session: started,
+          engineState: result.state,
+          focusSessionId: started['focus_session_id']?.toString(),
+          clearError: true,
+          clearSyncWarning: true,
+        );
+
+        _lastBackendSyncAt = now;
+
+        await ensureMonitoringStarted();
+        _startSyncTimer();
+        _emit();
+      } catch (e, st) {
+        debugPrint('START SESSION ERROR: $e');
+        debugPrint('$st');
+        rethrow;
+      }
     }
-
-    final logId = _state.logId;
-    final habitId = _state.habitId;
-
-    if (logId == null || habitId == null) {
-      throw Exception('Missing log or habit id.');
-    }
-
-    try {
-      final started = await _focusRuntimeService.startFocusSession(
-        logId: logId,
-        habitId: habitId,
-        currentLatitude: _latestPosition?.latitude,
-        currentLongitude: _latestPosition?.longitude,
-        initialForegroundAppIdentifier: 'com.example.achievr_app',
-        isScreenOff: false,
-      );
-
-      final snapshot = FocusRuntimeSnapshot(
-        capturedAt: DateTime.now(),
-        foregroundAppId: 'com.example.achievr_app',
-        isScreenOff: false,
-        latitude: _latestPosition?.latitude,
-        longitude: _latestPosition?.longitude,
-      );
-
-      _engine ??= _buildEngine(
-        habit: _state.habit,
-        policySnapshot: _state.policySnapshot,
-        locationConfig: _state.locationConfig,
-      );
-
-      final result = _engine!.start(snapshot);
-
-      _lastStableForegroundAppId = 'com.example.achievr_app';
-
-      _state = _state.copyWith(
-        session: started,
-        engineState: result.state,
-        focusSessionId: started['focus_session_id']?.toString(),
-        clearError: true,
-        clearSyncWarning: true,
-      );
-
-      _lastBackendSyncAt = DateTime.now();
-
-      await ensureMonitoringStarted();
-      _startSyncTimer();
-      _emit();
-    } catch (e, st) {
-      debugPrint('START SESSION ERROR: $e');
-      debugPrint('$st');
-      rethrow;
-    }
-  }
 
   Future<void> ensureMonitoringStarted() async {
     if (!_supportsNativeFocusRuntime) {
@@ -679,7 +683,7 @@ class FocusSessionRuntimeController extends ChangeNotifier
       );
 
       final snapshot = FocusRuntimeSnapshot(
-        capturedAt: DateTime.now(),
+        capturedAt: AppClock.now(),
         foregroundAppId: resolvedForegroundAppId,
         isScreenOff: raw.isScreenOff,
         latitude: _latestPosition?.latitude,
@@ -711,7 +715,7 @@ class FocusSessionRuntimeController extends ChangeNotifier
 
     if (!requiresLocation) return;
 
-    final now = DateTime.now();
+    final now = AppClock.now();
     final shouldRefresh = _lastLocationRefreshAt == null ||
         now.difference(_lastLocationRefreshAt!) >=
             const Duration(minutes: 2);
@@ -727,12 +731,102 @@ class FocusSessionRuntimeController extends ChangeNotifier
     }
   }
 
-  void _startSyncTimer() {
-    _syncTimer?.cancel();
-    _syncTimer = Timer.periodic(const Duration(seconds: 12), (_) async {
-      await syncToBackend();
-    });
+    void _startSyncTimer() {
+      _syncTimer?.cancel();
+      _syncTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
+        await recomputeFromAppClock();
+
+        final now = AppClock.now();
+        final shouldSync = _lastBackendSyncAt == null ||
+            now.difference(_lastBackendSyncAt!) >= const Duration(seconds: 12);
+
+        if (shouldSync) {
+          await syncToBackend();
+        }
+      });
+    }
+
+Future<void> recomputeFromAppClock() async {
+  final now = AppClock.now();
+
+  if (_engine == null) {
+    debugPrint('[FOCUS DEBUG] recompute blocked: engine=null now=$now');
+    return;
   }
+
+  if (_state.focusSessionId == null) {
+    debugPrint(
+      '[FOCUS DEBUG] recompute blocked: focusSessionId=null '
+      'phase=${_engine!.state.phase} now=$now',
+    );
+    return;
+  }
+
+  final before = _engine!.state;
+
+  if (!_state.hasLiveSession) {
+    debugPrint(
+      '[FOCUS DEBUG] recompute blocked: hasLiveSession=false '
+      'phase=${before.phase} '
+      'statePhase=${_state.engineState?.phase} '
+      'valid=${before.validFocusSeconds} '
+      'lastAccountingAt=${before.lastAccountingAt} '
+      'now=$now',
+    );
+    return;
+  }
+
+  final foregroundAppId = _resolveForegroundAppId(
+    rawForegroundAppId: before.foregroundAppId,
+    isScreenOff: before.isScreenOff,
+  );
+
+  final snapshot = FocusRuntimeSnapshot(
+    capturedAt: now,
+    foregroundAppId: foregroundAppId,
+    isScreenOff: before.isScreenOff,
+    latitude: _latestPosition?.latitude,
+    longitude: _latestPosition?.longitude,
+  );
+
+  final elapsed = now.difference(before.lastAccountingAt).inSeconds;
+
+  debugPrint(
+    '[FOCUS DEBUG] before tick '
+    'phase=${before.phase} '
+    'allowed=${before.isCurrentlyAllowed} '
+    'valid=${before.validFocusSeconds} '
+    'grace=${before.graceSecondsUsed} '
+    'last=${before.lastAccountingAt} '
+    'now=$now '
+    'elapsed=$elapsed '
+    'app=$foregroundAppId '
+    'screenOff=${before.isScreenOff}',
+  );
+
+  final result = _engine!.tick(snapshot);
+  final after = result.state;
+
+  debugPrint(
+    '[FOCUS DEBUG] after tick '
+    'phase=${after.phase} '
+    'allowed=${after.isCurrentlyAllowed} '
+    'valid=${after.validFocusSeconds} '
+    'grace=${after.graceSecondsUsed} '
+    'last=${after.lastAccountingAt} '
+    'thresholdMet=${after.thresholdMet} '
+    'terminal=${after.isTerminal} '
+    'reason=${after.activeViolationReason} '
+    'message=${after.activeViolationMessage}',
+  );
+
+  _state = _state.copyWith(
+    engineState: after,
+    clearSyncWarning: true,
+  );
+
+  _emit();
+}
 
   Future<void> syncToBackend() async {
     if (!_supportsNativeFocusRuntime) return;
@@ -741,11 +835,11 @@ class FocusSessionRuntimeController extends ChangeNotifier
 
     try {
       final engineState = _engine!.state;
-      final now = DateTime.now();
+      final now = AppClock.now();
 
       final elapsed = _lastBackendSyncAt == null
           ? 1
-          : now.difference(_lastBackendSyncAt!).inSeconds.clamp(1, 60);
+          : now.difference(_lastBackendSyncAt!).inSeconds.clamp(1, 86400);
 
       final updated = await _focusRuntimeService.tickFocusSession(
         focusSessionId: _state.focusSessionId!,
@@ -781,7 +875,7 @@ class FocusSessionRuntimeController extends ChangeNotifier
     if (_state.focusSessionId == null || _engine == null) return;
 
     try {
-      final result = _engine!.complete(DateTime.now());
+      final result = _engine!.complete(AppClock.now());
       final updated = await _focusRuntimeService.completeFocusSession(
         focusSessionId: _state.focusSessionId!,
       );
@@ -805,7 +899,7 @@ class FocusSessionRuntimeController extends ChangeNotifier
     if (_state.focusSessionId == null || _engine == null) return;
 
     try {
-      final result = _engine!.abandon(DateTime.now());
+      final result = _engine!.abandon(AppClock.now());
       await _focusRuntimeService.abandonFocusSession(
         focusSessionId: _state.focusSessionId!,
       );

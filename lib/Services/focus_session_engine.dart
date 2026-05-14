@@ -1,4 +1,4 @@
-import 'dart:math';
+import 'dart:math' as math;
 
 import 'package:achievr_app/Services/focus_engine_models.dart';
 import 'package:geolocator/geolocator.dart';
@@ -47,20 +47,27 @@ class FocusSessionEngine {
   FocusContextEvaluation evaluateContext(FocusRuntimeSnapshot snapshot) {
     final normalizedForeground = normalizeAppId(snapshot.foregroundAppId);
 
-    final isAchievr =
-        normalizedForeground != null && _achievrAppIds.contains(normalizedForeground);
+    final isAchievr = normalizedForeground != null &&
+        _achievrAppIds.contains(normalizedForeground);
+
+    final normalizedAllowedApps = policy.allowedAppIds
+        .map((e) => e.trim().toLowerCase())
+        .where((e) => e.isNotEmpty)
+        .toSet();
+
+    final isScreenOffAllowed = !snapshot.isScreenOff || policy.allowScreenOff;
 
     final isAllowedApp = snapshot.isScreenOff
         ? policy.allowScreenOff
         : isAchievr ||
-            (normalizedForeground != null &&
-                policy.allowedAppIds
-                    .map((e) => e.trim().toLowerCase())
-                    .contains(normalizedForeground));
-
-    final isScreenOffAllowed = !snapshot.isScreenOff || policy.allowScreenOff;
+            normalizedForeground == null ||
+            normalizedForeground == 'unknown' ||
+            normalizedForeground == 'unknown_foreground_app' ||
+            normalizedForeground == 'null' ||
+            normalizedAllowedApps.contains(normalizedForeground);
 
     bool isLocationAllowed = true;
+
     if (policy.requiresLocation) {
       if (locationTarget == null ||
           snapshot.latitude == null ||
@@ -73,6 +80,7 @@ class FocusSessionEngine {
           locationTarget!.latitude,
           locationTarget!.longitude,
         );
+
         isLocationAllowed = distance <= locationTarget!.radiusMeters;
       }
     }
@@ -80,7 +88,7 @@ class FocusSessionEngine {
     if (!isScreenOffAllowed) {
       return const FocusContextEvaluation(
         isAllowed: false,
-        isAppAllowed: false,
+        isAppAllowed: true,
         isLocationAllowed: true,
         isScreenOffAllowed: false,
         reason: FocusViolationReason.screenOffNotAllowed,
@@ -125,18 +133,26 @@ class FocusSessionEngine {
     final evaluation = evaluateContext(snapshot);
     final events = <FocusSessionEvent>[];
 
+    final nextPhase =
+        evaluation.isAllowed ? FocusSessionPhase.running : FocusSessionPhase.grace;
+
     _state = _state.copyWith(
-      phase: FocusSessionPhase.running,
+      phase: nextPhase,
       phaseEnteredAt: now,
       lastAccountingAt: now,
+      clearPendingViolationStartedAt: evaluation.isAllowed,
+      pendingViolationStartedAt: evaluation.isAllowed ? null : now,
       appAllowed: evaluation.isAppAllowed,
       locationAllowed: evaluation.isLocationAllowed,
       screenOffAllowed: evaluation.isScreenOffAllowed,
       isCurrentlyAllowed: evaluation.isAllowed,
       activeViolationReason: evaluation.reason,
       activeViolationMessage: evaluation.reasonMessage,
+      clearActiveViolationMessage: evaluation.reasonMessage == null,
       foregroundAppId: normalizeAppId(snapshot.foregroundAppId),
       isScreenOff: snapshot.isScreenOff,
+      thresholdMet: false,
+      isTerminal: false,
     );
 
     events.add(
@@ -144,15 +160,18 @@ class FocusSessionEngine {
         type: FocusEventType.sessionStarted,
         occurredAt: now,
         phaseBefore: FocusSessionPhase.arming,
-        phaseAfter: FocusSessionPhase.running,
-        reason: FocusViolationReason.none,
+        phaseAfter: nextPhase,
+        reason: evaluation.reason,
         message: 'Focus session started.',
         foregroundAppId: _state.foregroundAppId,
         metadata: null,
       ),
     );
 
-    return FocusSessionEngineResult(state: _state, events: events);
+    return FocusSessionEngineResult(
+      state: _state,
+      events: events,
+    );
   }
 
   FocusSessionEngineResult hydrateFromServer({
@@ -170,17 +189,20 @@ class FocusSessionEngine {
   }) {
     final evaluation = evaluateContext(snapshot);
 
+    final safeValidFocusSeconds = math.max(0, validFocusSeconds);
+    final safeGraceSecondsUsed = math.max(0, graceSecondsUsed);
+
     _state = FocusEngineState(
       phase: phase,
       startedAt: startedAt ?? now,
       lastAccountingAt: now,
       phaseEnteredAt: phaseEnteredAt ?? now,
       pendingViolationStartedAt: pendingViolationStartedAt,
-      validFocusSeconds: max(0, validFocusSeconds),
-      graceSecondsUsed: max(0, graceSecondsUsed),
-      appViolationCount: max(0, appViolationCount),
-      locationViolationCount: max(0, locationViolationCount),
-      screenOffViolationCount: max(0, screenOffViolationCount),
+      validFocusSeconds: safeValidFocusSeconds,
+      graceSecondsUsed: safeGraceSecondsUsed,
+      appViolationCount: math.max(0, appViolationCount),
+      locationViolationCount: math.max(0, locationViolationCount),
+      screenOffViolationCount: math.max(0, screenOffViolationCount),
       appAllowed: evaluation.isAppAllowed,
       locationAllowed: evaluation.isLocationAllowed,
       screenOffAllowed: evaluation.isScreenOffAllowed,
@@ -189,10 +211,8 @@ class FocusSessionEngine {
       activeViolationMessage: evaluation.reasonMessage,
       foregroundAppId: normalizeAppId(snapshot.foregroundAppId),
       isScreenOff: snapshot.isScreenOff,
-      thresholdMet: validFocusSeconds >= policy.requiredValidSeconds,
-      isTerminal: phase == FocusSessionPhase.completed ||
-          phase == FocusSessionPhase.failed ||
-          phase == FocusSessionPhase.abandoned,
+      thresholdMet: _thresholdMet(safeValidFocusSeconds),
+      isTerminal: _isTerminalPhase(phase),
     );
 
     return FocusSessionEngineResult(
@@ -203,19 +223,42 @@ class FocusSessionEngine {
 
   FocusSessionPhase mapServerStatusToPhase(String? status) {
     switch ((status ?? '').trim().toLowerCase()) {
+      case 'active':
       case 'running':
+      case 'in_progress':
+      case 'started':
         return FocusSessionPhase.running;
-      case 'grace':
-        return FocusSessionPhase.grace;
-      case 'completed':
-        return FocusSessionPhase.completed;
-      case 'failed':
-      case 'invalidated':
-        return FocusSessionPhase.failed;
-      case 'abandoned':
-        return FocusSessionPhase.abandoned;
+
+      case 'arming':
+        return FocusSessionPhase.arming;
+
+      case 'violation_debounce':
+      case 'debounce':
+      case 'warning':
       case 'paused':
         return FocusSessionPhase.violationDebounce;
+
+      case 'grace':
+        return FocusSessionPhase.grace;
+
+      case 'completed':
+      case 'complete':
+      case 'done':
+        return FocusSessionPhase.completed;
+
+      case 'failed':
+      case 'invalidated':
+      case 'missed':
+        return FocusSessionPhase.failed;
+
+      case 'abandoned':
+      case 'cancelled':
+      case 'canceled':
+        return FocusSessionPhase.abandoned;
+
+      case 'idle':
+        return FocusSessionPhase.idle;
+
       default:
         return FocusSessionPhase.arming;
     }
@@ -226,7 +269,44 @@ class FocusSessionEngine {
     final evaluation = evaluateContext(snapshot);
     final events = <FocusSessionEvent>[];
 
-    final elapsed = max(0, now.difference(_state.lastAccountingAt).inSeconds);
+    if (_state.isTerminal || _isTerminalPhase(_state.phase)) {
+      _state = _state.copyWith(
+        foregroundAppId: normalizeAppId(snapshot.foregroundAppId),
+        isScreenOff: snapshot.isScreenOff,
+      );
+
+      return FocusSessionEngineResult(
+        state: _state,
+        events: events,
+      );
+    }
+
+    var elapsed = now.difference(_state.lastAccountingAt).inSeconds;
+
+    if (elapsed < 0) {
+      elapsed = 0;
+    }
+
+    elapsed = elapsed.clamp(0, 86400);
+
+    if (elapsed == 0) {
+      _state = _state.copyWith(
+        appAllowed: evaluation.isAppAllowed,
+        locationAllowed: evaluation.isLocationAllowed,
+        screenOffAllowed: evaluation.isScreenOffAllowed,
+        isCurrentlyAllowed: evaluation.isAllowed,
+        activeViolationReason: evaluation.reason,
+        activeViolationMessage: evaluation.reasonMessage,
+        clearActiveViolationMessage: evaluation.reasonMessage == null,
+        foregroundAppId: normalizeAppId(snapshot.foregroundAppId),
+        isScreenOff: snapshot.isScreenOff,
+      );
+
+      return FocusSessionEngineResult(
+        state: _state,
+        events: events,
+      );
+    }
 
     var next = _state.copyWith(
       lastAccountingAt: now,
@@ -236,27 +316,103 @@ class FocusSessionEngine {
       isCurrentlyAllowed: evaluation.isAllowed,
       activeViolationReason: evaluation.reason,
       activeViolationMessage: evaluation.reasonMessage,
+      clearActiveViolationMessage: evaluation.reasonMessage == null,
       foregroundAppId: normalizeAppId(snapshot.foregroundAppId),
       isScreenOff: snapshot.isScreenOff,
     );
 
     switch (_state.phase) {
       case FocusSessionPhase.idle:
-      case FocusSessionPhase.arming:
-        return FocusSessionEngineResult(state: next, events: events);
-
-      case FocusSessionPhase.running:
         if (evaluation.isAllowed) {
           next = next.copyWith(
-            validFocusSeconds: _state.validFocusSeconds + elapsed,
-            thresholdMet:
-                (_state.validFocusSeconds + elapsed) >= policy.requiredValidSeconds,
+            phase: FocusSessionPhase.running,
+            phaseEnteredAt: now,
+            clearPendingViolationStartedAt: true,
+            activeViolationReason: FocusViolationReason.none,
+            clearActiveViolationMessage: true,
+          );
+
+          events.add(
+            FocusSessionEvent(
+              type: FocusEventType.runningResumed,
+              occurredAt: now,
+              phaseBefore: FocusSessionPhase.idle,
+              phaseAfter: FocusSessionPhase.running,
+              reason: FocusViolationReason.none,
+              message: 'Focus accounting resumed.',
+              foregroundAppId: next.foregroundAppId,
+              metadata: null,
+            ),
           );
         } else {
           next = next.copyWith(
-            validFocusSeconds: _state.validFocusSeconds + elapsed,
-            thresholdMet:
-                (_state.validFocusSeconds + elapsed) >= policy.requiredValidSeconds,
+            phase: FocusSessionPhase.grace,
+            phaseEnteredAt: now,
+            pendingViolationStartedAt: now,
+          );
+        }
+        break;
+
+      case FocusSessionPhase.arming:
+        if (evaluation.isAllowed) {
+          final newValidFocusSeconds = _state.validFocusSeconds + elapsed;
+
+          next = next.copyWith(
+            phase: FocusSessionPhase.running,
+            phaseEnteredAt: now,
+            validFocusSeconds: newValidFocusSeconds,
+            thresholdMet: _thresholdMet(newValidFocusSeconds),
+            clearPendingViolationStartedAt: true,
+            activeViolationReason: FocusViolationReason.none,
+            clearActiveViolationMessage: true,
+          );
+
+          events.add(
+            FocusSessionEvent(
+              type: FocusEventType.runningResumed,
+              occurredAt: now,
+              phaseBefore: FocusSessionPhase.arming,
+              phaseAfter: FocusSessionPhase.running,
+              reason: FocusViolationReason.none,
+              message: 'Focus accounting started.',
+              foregroundAppId: next.foregroundAppId,
+              metadata: null,
+            ),
+          );
+        } else {
+          next = next.copyWith(
+            phase: FocusSessionPhase.violationDebounce,
+            phaseEnteredAt: now,
+            pendingViolationStartedAt: now,
+          );
+
+          events.add(
+            FocusSessionEvent(
+              type: FocusEventType.violationDebounceStarted,
+              occurredAt: now,
+              phaseBefore: FocusSessionPhase.arming,
+              phaseAfter: FocusSessionPhase.violationDebounce,
+              reason: evaluation.reason,
+              message: evaluation.reasonMessage,
+              foregroundAppId: next.foregroundAppId,
+              metadata: null,
+            ),
+          );
+        }
+        break;
+
+      case FocusSessionPhase.running:
+        if (evaluation.isAllowed) {
+          final newValidFocusSeconds = _state.validFocusSeconds + elapsed;
+
+          next = next.copyWith(
+            validFocusSeconds: newValidFocusSeconds,
+            thresholdMet: _thresholdMet(newValidFocusSeconds),
+            activeViolationReason: FocusViolationReason.none,
+            clearActiveViolationMessage: true,
+          );
+        } else {
+          next = next.copyWith(
             phase: FocusSessionPhase.violationDebounce,
             phaseEnteredAt: now,
             pendingViolationStartedAt: now,
@@ -347,7 +503,6 @@ class FocusSessionEngine {
           next = next.copyWith(
             phase: FocusSessionPhase.running,
             phaseEnteredAt: now,
-            graceSecondsUsed: _state.graceSecondsUsed,
             clearPendingViolationStartedAt: true,
             clearActiveViolationMessage: true,
             activeViolationReason: FocusViolationReason.none,
@@ -399,11 +554,43 @@ class FocusSessionEngine {
       case FocusSessionPhase.completed:
       case FocusSessionPhase.failed:
       case FocusSessionPhase.abandoned:
-        return FocusSessionEngineResult(state: _state, events: events);
+        _state = next;
+        return FocusSessionEngineResult(
+          state: _state,
+          events: events,
+        );
+    }
+
+    if (next.thresholdMet && !_isTerminalPhase(next.phase)) {
+      next = next.copyWith(
+        phase: FocusSessionPhase.completed,
+        phaseEnteredAt: now,
+        isTerminal: true,
+        clearPendingViolationStartedAt: true,
+        clearActiveViolationMessage: true,
+        activeViolationReason: FocusViolationReason.none,
+      );
+
+      events.add(
+        FocusSessionEvent(
+          type: FocusEventType.sessionCompleted,
+          occurredAt: now,
+          phaseBefore: _state.phase,
+          phaseAfter: FocusSessionPhase.completed,
+          reason: FocusViolationReason.none,
+          message: 'Required focus target met.',
+          foregroundAppId: next.foregroundAppId,
+          metadata: null,
+        ),
+      );
     }
 
     _state = next;
-    return FocusSessionEngineResult(state: _state, events: events);
+
+    return FocusSessionEngineResult(
+      state: _state,
+      events: events,
+    );
   }
 
   FocusSessionEngineResult complete(DateTime now) {
@@ -411,9 +598,13 @@ class FocusSessionEngine {
 
     _state = _state.copyWith(
       phase: FocusSessionPhase.completed,
+      lastAccountingAt: now,
       phaseEnteredAt: now,
-      thresholdMet: _state.validFocusSeconds >= policy.requiredValidSeconds,
+      thresholdMet: true,
       isTerminal: true,
+      clearPendingViolationStartedAt: true,
+      clearActiveViolationMessage: true,
+      activeViolationReason: FocusViolationReason.none,
     );
 
     return FocusSessionEngineResult(
@@ -438,8 +629,12 @@ class FocusSessionEngine {
 
     _state = _state.copyWith(
       phase: FocusSessionPhase.abandoned,
+      lastAccountingAt: now,
       phaseEnteredAt: now,
       isTerminal: true,
+      clearPendingViolationStartedAt: true,
+      clearActiveViolationMessage: true,
+      activeViolationReason: FocusViolationReason.none,
     );
 
     return FocusSessionEngineResult(
@@ -457,5 +652,16 @@ class FocusSessionEngine {
         ),
       ],
     );
+  }
+
+  bool _thresholdMet(int validFocusSeconds) {
+    return policy.requiredValidSeconds > 0 &&
+        validFocusSeconds >= policy.requiredValidSeconds;
+  }
+
+  bool _isTerminalPhase(FocusSessionPhase phase) {
+    return phase == FocusSessionPhase.completed ||
+        phase == FocusSessionPhase.failed ||
+        phase == FocusSessionPhase.abandoned;
   }
 }

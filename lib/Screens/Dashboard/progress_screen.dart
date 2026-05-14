@@ -1,7 +1,7 @@
 // ignore_for_file: deprecated_member_use
 
 import 'dart:math' as math;
-
+import 'dart:async';
 import 'package:achievr_app/Services/app_clock.dart';
 import 'package:achievr_app/Widgets/hold_to_refresh_wrapper.dart';
 import 'package:flutter/material.dart';
@@ -14,8 +14,209 @@ class ProgressScreen extends StatefulWidget {
   State<ProgressScreen> createState() => _ProgressScreenState();
 }
 
-class _ProgressScreenState extends State<ProgressScreen> {
+class _ProgressScreenState extends State<ProgressScreen>
+    with WidgetsBindingObserver {
   final SupabaseClient supabase = Supabase.instance.client;
+
+  RealtimeChannel? _progressChannel;
+  Timer? _timeRefreshTimer;
+  Timer? _realtimeRefreshDebounce;
+
+String _logHabitTitle(Map<String, dynamic> log) {
+  final nestedHabit = log['habits'];
+
+  if (nestedHabit is Map<String, dynamic>) {
+    return (nestedHabit['title'] ?? 'Completed task').toString();
+  }
+
+  if (nestedHabit is Map) {
+    return (nestedHabit['title'] ?? 'Completed task').toString();
+  }
+
+  return (log['habit_title'] ??
+          log['title'] ??
+          log['habit_name'] ??
+          'Completed task')
+      .toString();
+}
+
+Widget _buildRecentCompletionsCard() {
+  return _glassCard(
+    margin: const EdgeInsets.only(top: 16),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _SectionHeader(
+          title: 'Recent wins',
+          subtitle: _recentCompletedLogs.isEmpty
+              ? 'Completed tasks and reflections will appear here.'
+              : 'Your latest completed commitments and reflections.',
+        ),
+        const SizedBox(height: 14),
+        if (_recentCompletedLogs.isEmpty)
+          const Text(
+            'No completed tasks recorded yet for this week.',
+            style: TextStyle(
+              color: Color(0xFF9D9DA8),
+              fontSize: 14,
+              height: 1.45,
+              fontWeight: FontWeight.w500,
+            ),
+          )
+        else
+          Column(
+            children: _recentCompletedLogs.map((log) {
+              final title = _logHabitTitle(log);
+              final goal = _logGoalTitle(log);
+              final reflection = _logReflection(log);
+              final dateLabel = _formatLogDate(log);
+
+              return Container(
+                margin: const EdgeInsets.only(bottom: 10),
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1D1D22),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: const Color(0xFF2B2B32)),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF25252B),
+                        borderRadius: BorderRadius.circular(13),
+                      ),
+                      child: const Icon(
+                        Icons.check_rounded,
+                        color: Color(0xFFF8F8F8),
+                        size: 21,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            title,
+                            style: const TextStyle(
+                              color: Color(0xFFF8F8F8),
+                              fontSize: 15,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: -0.2,
+                            ),
+                          ),
+                          if (goal.isNotEmpty) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              goal,
+                              style: const TextStyle(
+                                color: Color(0xFF8C8C96),
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                          if (reflection != null) ...[
+                            const SizedBox(height: 9),
+                            Text(
+                              '“$reflection”',
+                              maxLines: 3,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Color(0xFFA9A9B3),
+                                fontSize: 13,
+                                height: 1.4,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
+                          const SizedBox(height: 8),
+                          Text(
+                            dateLabel,
+                            style: const TextStyle(
+                              color: Color(0xFF70707A),
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }).toList(),
+          ),
+      ],
+    ),
+  );
+}
+
+String _logGoalTitle(Map<String, dynamic> log) {
+  final nestedHabit = log['habits'];
+
+  if (nestedHabit is Map<String, dynamic>) {
+    final nestedGoal = nestedHabit['goals'];
+
+    if (nestedGoal is Map<String, dynamic>) {
+      return (nestedGoal['title'] ?? '').toString();
+    }
+
+    if (nestedGoal is Map) {
+      return (nestedGoal['title'] ?? '').toString();
+    }
+  }
+
+  return (log['goal_title'] ?? '').toString();
+}
+
+String? _logReflection(Map<String, dynamic> log) {
+  final possibleKeys = [
+    'reflection',
+    'reflection_text',
+    'completion_reflection',
+    'completion_note',
+    'note',
+    'notes',
+    'evidence_note',
+    'verification_note',
+  ];
+
+  for (final key in possibleKeys) {
+    final value = log[key];
+
+    if (value == null) continue;
+
+    final text = value.toString().trim();
+
+    if (text.isNotEmpty && text.toLowerCase() != 'null') {
+      return text;
+    }
+  }
+
+  return null;
+}
+
+String _formatLogDate(Map<String, dynamic> log) {
+  final rawDate = log['log_date']?.toString();
+  if (rawDate == null || rawDate.isEmpty) return '';
+
+  final parsed = DateTime.tryParse(rawDate);
+  if (parsed == null) return rawDate;
+
+  final now = AppClock.now();
+  final today = DateTime(now.year, now.month, now.day);
+  final date = DateTime(parsed.year, parsed.month, parsed.day);
+
+  if (date == today) return 'Today';
+  if (date == today.subtract(const Duration(days: 1))) return 'Yesterday';
+
+  return '${parsed.month}/${parsed.day}/${parsed.year}';
+}
 
   bool _isLoading = true;
   String? _error;
@@ -34,6 +235,8 @@ class _ProgressScreenState extends State<ProgressScreen> {
   int _totalDoneAllTime = 0;
   int _currentStreak = 0;
 
+  List<Map<String, dynamic>> _recentCompletedLogs = [];
+
   static const Duration _gracePeriod = Duration(minutes: 30);
 
   DateTime get _screenNow => AppClock.now();
@@ -41,19 +244,89 @@ class _ProgressScreenState extends State<ProgressScreen> {
   @override
   void initState() {
     super.initState();
-    _loadProgressData();
+
+    WidgetsBinding.instance.addObserver(this);
     AppClock.debugNowNotifier.addListener(_handleClockChange);
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _startProgressRealtime();
+      _startTimeRefresh();
+      _loadProgressData();
+    });
+  }
+
+  void _startProgressRealtime() {
+  final user = supabase.auth.currentUser;
+  if (user == null) return;
+
+  _progressChannel?.unsubscribe();
+
+  _progressChannel = supabase
+      .channel('progress_habit_logs_${user.id}')
+      .onPostgresChanges(
+        event: PostgresChangeEvent.all,
+        schema: 'public',
+        table: 'habit_logs',
+        filter: PostgresChangeFilter(
+          type: PostgresChangeFilterType.eq,
+          column: 'user_id',
+          value: user.id,
+        ),
+        callback: (_) {
+          _scheduleRealtimeRefresh();
+        },
+      )
+      .subscribe();
+}
+
+  void _scheduleRealtimeRefresh() {
+    if (!mounted) return;
+
+    _realtimeRefreshDebounce?.cancel();
+    _realtimeRefreshDebounce = Timer(
+      const Duration(milliseconds: 250),
+      () {
+        if (!mounted) return;
+        _loadProgressData(showLoading: false);
+      },
+    );
+  }
+
+  void _startTimeRefresh() {
+    _timeRefreshTimer?.cancel();
+
+    _timeRefreshTimer = Timer.periodic(
+      const Duration(seconds: 30),
+      (_) {
+        if (!mounted) return;
+        _loadProgressData(showLoading: false);
+      },
+    );
   }
 
   void _handleClockChange() {
     if (!mounted) return;
-    _loadProgressData();
+    _loadProgressData(showLoading: false);
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     AppClock.debugNowNotifier.removeListener(_handleClockChange);
+
+    _timeRefreshTimer?.cancel();
+    _realtimeRefreshDebounce?.cancel();
+    _progressChannel?.unsubscribe();
+
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _startProgressRealtime();
+      _loadProgressData(showLoading: false);
+    }
   }
 
   String _toDateString(DateTime dt) {
@@ -107,9 +380,11 @@ class _ProgressScreenState extends State<ProgressScreen> {
   }
 
   String _classifyLogStatus(Map<String, dynamic> log, DateTime now) {
-    final rawStatus = (log['status'] ?? 'pending').toString();
+    final rawStatus = (log['status'] ?? 'pending').toString().toLowerCase();
 
-    if (rawStatus == 'done') return 'done';
+    if (rawStatus == 'done' || rawStatus == 'completed') {
+      return 'done';
+    }
 
     if (rawStatus == 'missed' ||
         rawStatus == 'failed' ||
@@ -134,11 +409,17 @@ class _ProgressScreenState extends State<ProgressScreen> {
     return 'available';
   }
 
-  Future<void> _loadProgressData() async {
-    setState(() {
-      _isLoading = true;
-      _error = null;
-    });
+  Future<void> _loadProgressData({bool showLoading = true}) async {
+    if (showLoading) {
+      setState(() {
+        _isLoading = true;
+        _error = null;
+      });
+    } else {
+      setState(() {
+        _error = null;
+      });
+    }
 
     try {
       final user = supabase.auth.currentUser;
@@ -168,15 +449,32 @@ class _ProgressScreenState extends State<ProgressScreen> {
 
       final todayLogsResponse = await supabase
           .from('habit_logs')
-          .select('status, log_date, scheduled_start, scheduled_end')
+          .select('''
+            *,
+            habits(
+              title,
+              goals(
+                title
+              )
+            )
+          ''')
           .eq('user_id', user.id)
-          .eq('log_date', todayString);
+          .eq('log_date', todayString)
+          .order('scheduled_start', ascending: true);
 
       final todayLogs = List<Map<String, dynamic>>.from(todayLogsResponse);
 
       final weeklyLogsResponse = await supabase
           .from('habit_logs')
-          .select('status, log_date, scheduled_start, scheduled_end')
+          .select('''
+            *,
+            habits(
+              title,
+              goals(
+                title
+              )
+            )
+          ''')
           .eq('user_id', user.id)
           .gte('log_date', startOfWeekString)
           .lte('log_date', endOfWeekString)
@@ -201,6 +499,32 @@ class _ProgressScreenState extends State<ProgressScreen> {
 
       final allLogsForStreak =
           List<Map<String, dynamic>>.from(allLogsForStreakResponse);
+
+      final recentCompletedLogs = weeklyLogs.where((log) {
+        return _classifyLogStatus(log, now) == 'done';
+      }).toList();
+
+      recentCompletedLogs.sort((a, b) {
+        final aCompleted = DateTime.tryParse(
+              a['completed_at']?.toString() ??
+                  a['updated_at']?.toString() ??
+                  a['created_at']?.toString() ??
+                  '',
+            ) ??
+            _logEndDateTime(a) ??
+            DateTime(1970);
+
+        final bCompleted = DateTime.tryParse(
+              b['completed_at']?.toString() ??
+                  b['updated_at']?.toString() ??
+                  b['created_at']?.toString() ??
+                  '',
+            ) ??
+            _logEndDateTime(b) ??
+            DateTime(1970);
+
+        return bCompleted.compareTo(aCompleted);
+      });
 
       final totalToday = todayLogs.length;
 
@@ -256,6 +580,8 @@ class _ProgressScreenState extends State<ProgressScreen> {
         _totalDoneAllTime = allDoneLogs.length;
         _currentStreak = streak;
 
+        _recentCompletedLogs = recentCompletedLogs.take(5).toList();
+
         _isLoading = false;
       });
     } catch (e, st) {
@@ -300,7 +626,10 @@ class _ProgressScreenState extends State<ProgressScreen> {
 
       if (dayLogs == null || dayLogs.isEmpty) break;
 
-      final hasDone = dayLogs.any((log) => log['status'].toString() == 'done');
+      final hasDone = dayLogs.any((log) {
+        final status = log['status']?.toString().toLowerCase();
+        return status == 'done';
+      });
 
       if (hasDone) {
         streak++;
@@ -743,6 +1072,7 @@ class _ProgressScreenState extends State<ProgressScreen> {
             _buildHeroCard(),
             if (hasAnyData) ...[
               _buildTodayCard(),
+              _buildRecentCompletionsCard(),
               _buildWeekCard(),
               _buildRecommendationCard(),
             ] else
