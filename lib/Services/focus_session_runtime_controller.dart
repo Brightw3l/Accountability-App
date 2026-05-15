@@ -14,6 +14,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:achievr_app/Services/app_clock.dart';
+import 'package:achievr_app/Services/tone_service.dart';
 
 class FocusRuntimeViewState {
   final bool isInitialized;
@@ -107,26 +108,29 @@ class FocusRuntimeViewState {
     }
   }
 
-  FocusRuntimeViewState copyWith({
-    bool? isInitialized,
-    bool? isLoading,
-    String? error,
-    bool clearError = false,
-    String? syncWarning,
-    bool clearSyncWarning = false,
-    Map<String, dynamic>? log,
-    Map<String, dynamic>? habit,
-    Map<String, dynamic>? session,
-    Map<String, dynamic>? policySnapshot,
-    Map<String, dynamic>? locationConfig,
-    FocusEngineState? engineState,
-    bool? usageAccessReady,
-    bool? locationPermissionReady,
-    bool? monitoringActive,
-    String? focusSessionId,
-    String? logId,
-    String? habitId,
-  }) {
+    FocusRuntimeViewState copyWith({
+      bool? isInitialized,
+      bool? isLoading,
+      String? error,
+      bool clearError = false,
+      String? syncWarning,
+      bool clearSyncWarning = false,
+      Map<String, dynamic>? log,
+      Map<String, dynamic>? habit,
+      Map<String, dynamic>? session,
+      bool clearSession = false,
+      Map<String, dynamic>? policySnapshot,
+      Map<String, dynamic>? locationConfig,
+      FocusEngineState? engineState,
+      bool clearEngineState = false,
+      bool? usageAccessReady,
+      bool? locationPermissionReady,
+      bool? monitoringActive,
+      String? focusSessionId,
+      bool clearFocusSessionId = false,
+      String? logId,
+      String? habitId,
+    }) {
     return FocusRuntimeViewState(
       isInitialized: isInitialized ?? this.isInitialized,
       isLoading: isLoading ?? this.isLoading,
@@ -134,15 +138,16 @@ class FocusRuntimeViewState {
       syncWarning: clearSyncWarning ? null : (syncWarning ?? this.syncWarning),
       log: log ?? this.log,
       habit: habit ?? this.habit,
-      session: session ?? this.session,
+      session: clearSession ? null : (session ?? this.session),
       policySnapshot: policySnapshot ?? this.policySnapshot,
       locationConfig: locationConfig ?? this.locationConfig,
-      engineState: engineState ?? this.engineState,
+      engineState: clearEngineState ? null : (engineState ?? this.engineState),
       usageAccessReady: usageAccessReady ?? this.usageAccessReady,
       locationPermissionReady:
           locationPermissionReady ?? this.locationPermissionReady,
       monitoringActive: monitoringActive ?? this.monitoringActive,
-      focusSessionId: focusSessionId ?? this.focusSessionId,
+      focusSessionId:
+          clearFocusSessionId ? null : (focusSessionId ?? this.focusSessionId),
       logId: logId ?? this.logId,
       habitId: habitId ?? this.habitId,
     );
@@ -188,6 +193,12 @@ class FocusSessionRuntimeController extends ChangeNotifier
   AppLifecycleState? _lastLifecycleState;
   DateTime? _lastLifecycleChangeAt;
   String? _lastStableForegroundAppId;
+
+  FocusSessionPhase? _lastTonePhase;
+  String? _lastToneViolationReason;
+  bool _hasPlayedStartTone = false;
+  bool _hasPlayedCompletionTone = false;
+  bool _hasPlayedFailureTone = false;
 
   static const Duration _foregroundStabilizationWindow =
       Duration(seconds: 3);
@@ -293,10 +304,22 @@ class FocusSessionRuntimeController extends ChangeNotifier
       return;
     }
 
+    _lastTonePhase = null;
+    _lastToneViolationReason = null;
+    _hasPlayedStartTone = false;
+    _hasPlayedCompletionTone = false;
+    _hasPlayedFailureTone = false;
+
+    await ToneService.instance.stopAlarm(playSafeTone: false);
+
     _state = _state.copyWith(
       isLoading: true,
       clearError: true,
       clearSyncWarning: true,
+      clearSession: true,
+      clearEngineState: true,
+      clearFocusSessionId: true,
+      monitoringActive: false,
       log: Map<String, dynamic>.from(log),
       logId: requestedLogId,
       habitId: _extractHabitIdFromLog(log),
@@ -530,70 +553,112 @@ class FocusSessionRuntimeController extends ChangeNotifier
   }
 
     Future<void> startSessionForAttachedLog() async {
-      if (!_supportsNativeFocusRuntime) {
-        throw Exception(
-          'Live Focus Mode is currently supported on Android only. '
-          'Use an Android phone or Android emulator.',
-        );
-      }
+  if (!_supportsNativeFocusRuntime) {
+    throw Exception(
+      'Live Focus Mode is currently supported on Android only. '
+      'Use an Android phone or Android emulator.',
+    );
+  }
 
-      final logId = _state.logId;
-      final habitId = _state.habitId;
+  final logId = _state.logId;
+  final habitId = _state.habitId;
 
-      if (logId == null || habitId == null) {
-        throw Exception('Missing log or habit id.');
-      }
+  if (logId == null || habitId == null) {
+    throw Exception('Missing log or habit id.');
+  }
 
-      try {
-        final now = AppClock.now();
+  if (_state.hasLiveSession) {
+    throw Exception('This task already has an active focus session.');
+  }
 
-        final started = await _focusRuntimeService.startFocusSession(
-          logId: logId,
-          habitId: habitId,
-          currentLatitude: _latestPosition?.latitude,
-          currentLongitude: _latestPosition?.longitude,
-          initialForegroundAppIdentifier: 'com.example.achievr_app',
-          isScreenOff: false,
-        );
+  try {
+    final now = AppClock.now();
 
-        final snapshot = FocusRuntimeSnapshot(
-          capturedAt: now,
-          foregroundAppId: 'com.example.achievr_app',
-          isScreenOff: false,
-          latitude: _latestPosition?.latitude,
-          longitude: _latestPosition?.longitude,
-        );
+    _engine ??= _buildEngine(
+      habit: _state.habit,
+      policySnapshot: _state.policySnapshot,
+      locationConfig: _state.locationConfig,
+    );
 
-        _engine ??= _buildEngine(
-          habit: _state.habit,
-          policySnapshot: _state.policySnapshot,
-          locationConfig: _state.locationConfig,
-        );
+    _state = _state.copyWith(
+      engineState: _engine?.state,
+      clearError: true,
+      clearSyncWarning: true,
+      clearSession: true,
+      clearFocusSessionId: true,
+      monitoringActive: false,
+    );
+    _emit();
 
-        final result = _engine!.start(snapshot);
+    final started = await _focusRuntimeService.startFocusSession(
+      logId: logId,
+      habitId: habitId,
+      currentLatitude: _latestPosition?.latitude,
+      currentLongitude: _latestPosition?.longitude,
+      initialForegroundAppIdentifier: 'com.example.achievr_app',
+      isScreenOff: false,
+    );
 
-        _lastStableForegroundAppId = 'com.example.achievr_app';
+    final snapshot = FocusRuntimeSnapshot(
+      capturedAt: now,
+      foregroundAppId: 'com.example.achievr_app',
+      isScreenOff: false,
+      latitude: _latestPosition?.latitude,
+      longitude: _latestPosition?.longitude,
+    );
 
-        _state = _state.copyWith(
-          session: started,
-          engineState: result.state,
-          focusSessionId: started['focus_session_id']?.toString(),
-          clearError: true,
-          clearSyncWarning: true,
-        );
+    final result = _engine!.start(snapshot);
 
-        _lastBackendSyncAt = now;
+    _lastStableForegroundAppId = 'com.example.achievr_app';
 
-        await ensureMonitoringStarted();
-        _startSyncTimer();
-        _emit();
-      } catch (e, st) {
-        debugPrint('START SESSION ERROR: $e');
-        debugPrint('$st');
-        rethrow;
-      }
-    }
+    _state = _state.copyWith(
+      session: started,
+      engineState: result.state,
+      focusSessionId: started['focus_session_id']?.toString(),
+      clearError: true,
+      clearSyncWarning: true,
+      monitoringActive: false,
+    );
 
+    _lastBackendSyncAt = now;
+
+    await ensureMonitoringStarted();
+    _startSyncTimer();
+    _emit();
+
+    await _syncTonesForEngineState(result.state);
+  } catch (e, st) {
+    debugPrint('START SESSION ERROR: $e');
+    debugPrint('$st');
+
+    _syncTimer?.cancel();
+
+    try {
+      await _runtimeSub?.cancel();
+    } catch (_) {}
+
+    _runtimeSub = null;
+
+    try {
+      await _deviceRuntimeService.stopMonitoring();
+    } catch (_) {}
+
+    _engine = null;
+    _lastBackendSyncAt = null;
+
+    _state = _state.copyWith(
+      clearSession: true,
+      clearFocusSessionId: true,
+      clearEngineState: true,
+      monitoringActive: false,
+      error: 'Could not start focus: $e',
+    );
+
+    _emit();
+
+    rethrow;
+  }
+}
   Future<void> ensureMonitoringStarted() async {
     if (!_supportsNativeFocusRuntime) {
       _state = _state.copyWith(
@@ -671,6 +736,69 @@ class FocusSessionRuntimeController extends ChangeNotifier
     }
   }
 
+  Future<void> _syncTonesForEngineState(FocusEngineState engineState) async {
+    final phase = engineState.phase;
+    final reason = engineState.activeViolationReason.toString();
+
+    final phaseChanged = _lastTonePhase != phase;
+    final violationChanged = _lastToneViolationReason != reason;
+
+    _lastTonePhase = phase;
+    _lastToneViolationReason = reason;
+
+    if (phase == FocusSessionPhase.running) {
+      if (!_hasPlayedStartTone) {
+        _hasPlayedStartTone = true;
+        await ToneService.instance.play(AppTone.taskStart);
+      }
+
+      if (ToneService.instance.isAlarmPlaying) {
+        await ToneService.instance.stopAlarm();
+      }
+
+      return;
+    }
+
+    if (phase == FocusSessionPhase.violationDebounce ||
+        phase == FocusSessionPhase.grace) {
+      if (phaseChanged || violationChanged || !ToneService.instance.isAlarmPlaying) {
+        final isLocationViolation =
+            reason.toLowerCase().contains('location');
+
+        await ToneService.instance.startAlarm(
+          isLocationViolation
+              ? AppTone.locationViolation
+              : AppTone.appViolation,
+        );
+      }
+
+      return;
+    }
+
+    if (phase == FocusSessionPhase.completed) {
+      await ToneService.instance.stopAlarm(playSafeTone: false);
+
+      if (!_hasPlayedCompletionTone) {
+        _hasPlayedCompletionTone = true;
+        await ToneService.instance.play(AppTone.success);
+      }
+
+      return;
+    }
+
+    if (phase == FocusSessionPhase.failed ||
+        phase == FocusSessionPhase.abandoned) {
+      await ToneService.instance.stopAlarm(playSafeTone: false);
+
+      if (!_hasPlayedFailureTone) {
+        _hasPlayedFailureTone = true;
+        await ToneService.instance.play(AppTone.rejected);
+      }
+
+      return;
+    }
+  }
+
   Future<void> _handleRuntimeSnapshot(DeviceRuntimeSnapshot raw) async {
     try {
       if (_engine == null) return;
@@ -696,7 +824,10 @@ class FocusSessionRuntimeController extends ChangeNotifier
         engineState: result.state,
         clearSyncWarning: true,
       );
+
       _emit();
+
+      await _syncTonesForEngineState(result.state);
     } catch (e, st) {
       debugPrint('HANDLE RUNTIME SNAPSHOT ERROR: $e');
       debugPrint('$st');
@@ -704,6 +835,7 @@ class FocusSessionRuntimeController extends ChangeNotifier
       _state = _state.copyWith(
         syncWarning: 'Runtime issue detected. Monitoring is recovering.',
       );
+
       _emit();
     }
   }
@@ -821,11 +953,12 @@ Future<void> recomputeFromAppClock() async {
   );
 
   _state = _state.copyWith(
-    engineState: after,
+    engineState: result.state,
     clearSyncWarning: true,
   );
-
   _emit();
+
+  await _syncTonesForEngineState(after);
 }
 
   Future<void> syncToBackend() async {
@@ -876,10 +1009,11 @@ Future<void> recomputeFromAppClock() async {
 
     try {
       final result = _engine!.complete(AppClock.now());
+
       final updated = await _focusRuntimeService.completeFocusSession(
         focusSessionId: _state.focusSessionId!,
+        clientValidFocusSeconds: result.state.validFocusSeconds,
       );
-
       await stopMonitoring();
 
       _state = _state.copyWith(

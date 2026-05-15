@@ -9,6 +9,7 @@
 
     <!-- Notifications -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
 
     <!-- Power / runtime -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />

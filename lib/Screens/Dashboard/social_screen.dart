@@ -33,6 +33,8 @@ class _SocialScreenState extends State<SocialScreen>
   Map<String, dynamic>? _profile;
   Map<String, dynamic>? _disciplineStats;
 
+  List<Map<String, dynamic>> _xpLeaderboard = [];
+
   int _friendCount = 0;
   int _incomingRequestCount = 0;
 
@@ -201,7 +203,7 @@ class _SocialScreenState extends State<SocialScreen>
 
       final friendshipsFuture = supabase
           .from('friendships')
-          .select('friendship_id')
+          .select('friendship_id, requester_id, addressee_id')
           .eq('status', 'accepted')
           .or('requester_id.eq.${user.id},addressee_id.eq.${user.id}');
 
@@ -218,21 +220,29 @@ class _SocialScreenState extends State<SocialScreen>
         requestsFuture,
       ]);
 
-      final profileResponse = results[0] as Map<String, dynamic>?;
-      final statsResponse = results[1] as Map<String, dynamic>?;
-      final friendships = List<Map<String, dynamic>>.from(results[2] as List);
-      final requests = List<Map<String, dynamic>>.from(results[3] as List);
+    final profileResponse = results[0] as Map<String, dynamic>?;
+    final statsResponse = results[1] as Map<String, dynamic>?;
+    final friendships = List<Map<String, dynamic>>.from(results[2] as List);
+    final requests = List<Map<String, dynamic>>.from(results[3] as List);
 
-      if (!mounted) return;
+    final xpLeaderboard = await _buildXpLeaderboard(
+      currentUserId: user.id,
+      currentProfile: profileResponse,
+      currentStats: statsResponse,
+      friendships: friendships,
+    );
 
-      setState(() {
-        _profile = profileResponse;
-        _disciplineStats = statsResponse;
-        _friendCount = friendships.length;
-        _incomingRequestCount = requests.length;
-        _isLoading = false;
-        _isRefreshingSoftly = false;
-      });
+    if (!mounted) return;
+
+    setState(() {
+      _profile = profileResponse;
+      _disciplineStats = statsResponse;
+      _xpLeaderboard = xpLeaderboard;
+      _friendCount = friendships.length;
+      _incomingRequestCount = requests.length;
+      _isLoading = false;
+      _isRefreshingSoftly = false;
+    });
     } catch (e, st) {
       debugPrint('SOCIAL SCREEN ERROR: $e');
       debugPrint('$st');
@@ -245,6 +255,54 @@ class _SocialScreenState extends State<SocialScreen>
         _isRefreshingSoftly = false;
       });
     }
+  }
+
+  Future<List<Map<String, dynamic>>> _buildXpLeaderboard({
+    required String currentUserId,
+    required Map<String, dynamic>? currentProfile,
+    required Map<String, dynamic>? currentStats,
+    required List<Map<String, dynamic>> friendships,
+  }) async {
+    try {
+      final response = await supabase.rpc(
+        'get_friend_xp_leaderboard',
+        params: {
+          'p_limit': 3,
+        },
+      );
+
+      final ranking = List<Map<String, dynamic>>.from(response);
+
+      for (var i = 0; i < ranking.length; i++) {
+        ranking[i]['rank'] = i + 1;
+      }
+
+      return ranking;
+    } catch (e) {
+      debugPrint('XP LEADERBOARD RPC ERROR: $e');
+
+      final username = currentProfile?['username']?.toString().trim();
+
+      return [
+        {
+          'user_id': currentUserId,
+          'username': username != null && username.isNotEmpty
+              ? username
+              : _username,
+          'public_handle': currentProfile?['public_handle']?.toString() ?? '',
+          'execution_points': _coerceInt(currentStats?['execution_points']) ?? 0,
+          'current_streak': _coerceInt(currentStats?['current_streak']) ?? 0,
+          'is_current_user': true,
+          'rank': 1,
+        },
+      ];
+    }
+  }
+  int? _coerceInt(dynamic value) {
+    if (value == null) return null;
+    if (value is int) return value;
+    if (value is double) return value.round();
+    return int.tryParse(value.toString());
   }
 
   Future<void> _signOut() async {
@@ -349,13 +407,6 @@ class _SocialScreenState extends State<SocialScreen>
     return 'User';
   }
 
-  String get _publicHandle {
-    final handle = _profile?['public_handle'];
-    if (handle is String && handle.trim().isNotEmpty) {
-      return handle.trim();
-    }
-    return '';
-  }
 
   String get _currentTitle {
     final title = _profile?['current_title'];
@@ -558,19 +609,6 @@ class _SocialScreenState extends State<SocialScreen>
                     height: 1,
                   ),
                 ),
-                if (_publicHandle.isNotEmpty) ...[
-                  const SizedBox(height: 6),
-                  Text(
-                    '@$_publicHandle',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Color(0xFF8C8C96),
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ],
                 const SizedBox(height: 12),
                 Wrap(
                   spacing: 8,
@@ -653,6 +691,253 @@ class _SocialScreenState extends State<SocialScreen>
     );
   }
 
+  Widget _buildXpRankingSection() {
+    final ranking = _xpLeaderboard;
+
+    if (ranking.isEmpty) {
+      return _card(
+        margin: const EdgeInsets.only(top: 14),
+        padding: const EdgeInsets.fromLTRB(16, 15, 16, 16),
+        child: Row(
+          children: [
+            _rankingProfileBubble(
+              name: _username,
+              size: 44,
+              rank: 1,
+              highlighted: true,
+            ),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Text(
+                'Add friends to compare XP rankings.',
+                style: TextStyle(
+                  color: Color(0xFFB8B8C0),
+                  fontSize: 13,
+                  height: 1.35,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return _card(
+      margin: const EdgeInsets.only(top: 14),
+      padding: const EdgeInsets.fromLTRB(16, 15, 16, 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Friends XP',
+                  style: TextStyle(
+                    color: Color(0xFFF8F8F8),
+                    fontSize: 17,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: -0.3,
+                  ),
+                ),
+              ),
+              GestureDetector(
+                onTap: _openFriends,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF202026),
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(color: const Color(0xFF303038)),
+                  ),
+                  child: const Text(
+                    'Compare',
+                    style: TextStyle(
+                      color: Color(0xFFF8F8F8),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Expanded(
+                child: ranking.length > 1
+                    ? _rankingMiniCard(ranking[1], compact: true)
+                    : const SizedBox.shrink(),
+              ),
+              const SizedBox(width: 9),
+              Expanded(
+                flex: 2,
+                child: _rankingMiniCard(ranking[0], champion: true),
+              ),
+              const SizedBox(width: 9),
+              Expanded(
+                child: ranking.length > 2
+                    ? _rankingMiniCard(ranking[2], compact: true)
+                    : const SizedBox.shrink(),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _rankingMiniCard(
+    Map<String, dynamic> item, {
+    bool champion = false,
+    bool compact = false,
+  }) {
+    final rank = _coerceInt(item['rank']) ?? 0;
+    final name = (item['username'] ?? 'Friend').toString();
+    final points = _coerceInt(item['execution_points']) ?? 0;
+    final isCurrentUser = item['is_current_user'] == true;
+
+    final height = champion ? 148.0 : 118.0;
+    final avatarSize = champion ? 58.0 : 42.0;
+
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 240),
+      height: height,
+      padding: EdgeInsets.all(champion ? 13 : 10),
+      decoration: BoxDecoration(
+        color: champion ? const Color(0xFF202026) : const Color(0xFF18181D),
+        borderRadius: BorderRadius.circular(champion ? 24 : 20),
+        border: Border.all(
+          color: champion ? const Color(0xFFF8F8F8) : const Color(0xFF2B2B32),
+          width: champion ? 1.3 : 1,
+        ),
+        boxShadow: champion
+            ? [
+                BoxShadow(
+                  color: Colors.white.withValues(alpha: 0.07),
+                  blurRadius: 22,
+                  offset: const Offset(0, 12),
+                ),
+              ]
+            : null,
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          _rankingProfileBubble(
+            name: name,
+            size: avatarSize,
+            rank: rank,
+            highlighted: champion,
+          ),
+          SizedBox(height: champion ? 10 : 8),
+          Text(
+            isCurrentUser ? 'You' : name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: const Color(0xFFF8F8F8),
+              fontSize: champion ? 14 : 11,
+              fontWeight: FontWeight.w900,
+              letterSpacing: -0.1,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '$points XP',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: const Color(0xFF9A9AA3),
+              fontSize: champion ? 12 : 10,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _rankingProfileBubble({
+    required String name,
+    required double size,
+    required int rank,
+    required bool highlighted,
+  }) {
+    final initial = name.trim().isNotEmpty ? name.trim()[0].toUpperCase() : 'U';
+
+    return Stack(
+      clipBehavior: Clip.none,
+      alignment: Alignment.center,
+      children: [
+        Container(
+          width: size,
+          height: size,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: highlighted
+                  ? const [
+                      Color(0xFFF8F8F8),
+                      Color(0xFFBEBEC7),
+                    ]
+                  : const [
+                      Color(0xFF2A2A31),
+                      Color(0xFF111114),
+                    ],
+            ),
+            border: Border.all(
+              color: highlighted ? const Color(0xFFF8F8F8) : const Color(0xFF34343C),
+            ),
+          ),
+          child: Center(
+            child: Text(
+              initial,
+              style: TextStyle(
+                color: highlighted ? Colors.black : const Color(0xFFF8F8F8),
+                fontSize: size * 0.38,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ),
+        ),
+        Positioned(
+          top: -7,
+          right: -5,
+          child: Container(
+            width: highlighted ? 25 : 21,
+            height: highlighted ? 25 : 21,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: highlighted ? const Color(0xFFF8F8F8) : const Color(0xFF2A2A31),
+              border: Border.all(color: const Color(0xFF09090B), width: 2),
+            ),
+            child: Center(
+              child: Text(
+                '$rank',
+                style: TextStyle(
+                  color: highlighted ? Colors.black : const Color(0xFFF8F8F8),
+                  fontSize: highlighted ? 12 : 10,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildSocialGrid() {
     return _card(
       margin: const EdgeInsets.only(top: 16),
@@ -667,16 +952,6 @@ class _SocialScreenState extends State<SocialScreen>
               fontSize: 21,
               fontWeight: FontWeight.w900,
               letterSpacing: -0.5,
-            ),
-          ),
-          const SizedBox(height: 5),
-          const Text(
-            'Manage the people and permissions around your progress.',
-            style: TextStyle(
-              color: Color(0xFF8C8C96),
-              fontSize: 13,
-              height: 1.35,
-              fontWeight: FontWeight.w500,
             ),
           ),
           const SizedBox(height: 16),
@@ -1079,6 +1354,7 @@ class _SocialScreenState extends State<SocialScreen>
           children: [
             _buildTopBar(),
             _buildCompactProfileCard(),
+            _buildXpRankingSection(),
             _buildSocialGrid(),
           ],
         ),

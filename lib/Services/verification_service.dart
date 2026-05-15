@@ -523,6 +523,8 @@ class VerificationService {
     required String logId,
     required String habitId,
     String? note,
+    double? currentLatitude,
+    double? currentLongitude,
   }) async {
     final existingPending = await _supabase
         .from('log_verification_requests')
@@ -544,6 +546,8 @@ class VerificationService {
       logId: logId,
       habitId: habitId,
       note: note ?? 'Submitted for partner review.',
+      currentLatitude: currentLatitude,
+      currentLongitude: currentLongitude,
     );
 
     final created = await _supabase

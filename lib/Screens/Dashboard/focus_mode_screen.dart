@@ -18,6 +18,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:achievr_app/Services/verification_service.dart';
+import 'package:achievr_app/Services/tone_service.dart';
 
 class FocusModeScreen extends ConsumerStatefulWidget {
   final Map<String, dynamic> log;
@@ -50,6 +51,8 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
   bool _isApplyingAutoCompletion = false;
   String? _lastHandledCompletionLogId;
 
+  Timer? _uiClockTimer;
+
   bool _needsPartnerVerification(Map<String, dynamic>? habit) {
     final type = (habit?['verification_type'] ?? '').toString();
     final requiresVerifier = habit?['requires_verifier'] == true;
@@ -65,10 +68,75 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
     required String logId,
     required String habitId,
   }) async {
+    final controller = ref.read(focusRuntimeControllerProvider);
+    final runtimeState = controller.state;
+
+    Map<String, dynamic>? habit = runtimeState.habit;
+
+    habit ??= await Supabase.instance.client
+        .from('habits')
+        .select('''
+          habit_id,
+          verification_type,
+          evidence_type,
+          requires_verifier
+        ''')
+        .eq('habit_id', habitId)
+        .maybeSingle();
+
+    if (habit == null) {
+      throw Exception('Habit not found for partner review.');
+    }
+
+    final verificationType =
+        (habit['verification_type'] ?? '').toString().trim();
+
+    final evidenceType = (habit['evidence_type'] ?? '').toString().trim();
+
+    final needsLocation = verificationType == 'location' ||
+        verificationType == 'location_focus' ||
+        verificationType == 'location_partner' ||
+        verificationType == 'location_focus_partner' ||
+        evidenceType.contains('location');
+
+    double? currentLatitude;
+    double? currentLongitude;
+
+    if (needsLocation) {
+      final position = await _locationRuntimeService.getCurrentPosition();
+
+      currentLatitude = position.latitude;
+      currentLongitude = position.longitude;
+
+      await _verificationService.assertLocationEligible(
+        habitId: habitId,
+        currentLatitude: currentLatitude,
+        currentLongitude: currentLongitude,
+      );
+
+      debugPrint(
+        '[LOCATION VERIFY] submit allowed '
+        'habitId=$habitId '
+        'lat=$currentLatitude '
+        'lng=$currentLongitude '
+        'accuracy=${position.accuracy}',
+      );
+    }
+
     await _verificationService.ensurePartnerVerificationRequestForLog(
       logId: logId,
       habitId: habitId,
       note: 'Focus task completed and submitted for partner review.',
+      currentLatitude: currentLatitude,
+      currentLongitude: currentLongitude,
+    );
+    await ToneService.instance.play(AppTone.submittedForReview);
+    
+    debugPrint(
+      '[VERIFY REQUEST] sent '
+      'logId=$logId '
+      'habitId=$habitId '
+      'needsLocation=$needsLocation',
     );
 
     if (!mounted) return;
@@ -79,8 +147,6 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
       ),
     );
   }
-
-  Timer? _uiClockTimer;
 
   bool get _supportsNativeFocusRuntime => !kIsWeb && Platform.isAndroid;
 

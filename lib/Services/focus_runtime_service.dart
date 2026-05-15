@@ -346,9 +346,10 @@ class FocusRuntimeService {
     );
   }
 
-  Future<Map<String, dynamic>> completeFocusSession({
-    required String focusSessionId,
-  }) async {
+    Future<Map<String, dynamic>> completeFocusSession({
+      required String focusSessionId,
+      int? clientValidFocusSeconds,
+    }) async {
     final session = await _fetchSession(focusSessionId);
     if (session == null) {
       throw Exception('Focus session not found.');
@@ -392,7 +393,14 @@ class FocusRuntimeService {
       throw Exception('This task is already closed.');
     }
 
-    final validFocusSeconds = _coerceInt(session['valid_focus_seconds']) ?? 0;
+    final backendValidFocusSeconds =
+        _coerceInt(session['valid_focus_seconds']) ?? 0;
+
+    final validFocusSeconds =
+        clientValidFocusSeconds != null &&
+                clientValidFocusSeconds > backendValidFocusSeconds
+            ? clientValidFocusSeconds
+            : backendValidFocusSeconds;
     final plannedDurationSeconds =
         _coerceInt(session['planned_duration_seconds']);
     final minValidMinutes = _coerceInt(habit['min_valid_minutes']);
@@ -417,6 +425,7 @@ class FocusRuntimeService {
         .update({
           'status': thresholdMet ? 'completed' : 'failed',
           'ended_at': AppClock.now().toIso8601String(),
+          'valid_focus_seconds': validFocusSeconds,
           'threshold_met': thresholdMet,
           'invalidated_reason':
               thresholdMet ? null : 'Focus threshold not met',
