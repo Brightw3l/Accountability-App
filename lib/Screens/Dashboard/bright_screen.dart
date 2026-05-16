@@ -1,6 +1,7 @@
 import 'package:achievr_app/Services/bright_monitoring_service.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:achievr_app/Services/bright_service.dart';
 
 class BrightScreen extends StatefulWidget {
   const BrightScreen({super.key});
@@ -11,8 +12,10 @@ class BrightScreen extends StatefulWidget {
 
 class _BrightScreenState extends State<BrightScreen> {
   final SupabaseClient _supabase = Supabase.instance.client;
-  final BrightMonitoringService _brightService = BrightMonitoringService();
+  final BrightMonitoringService _monitoringService = BrightMonitoringService();
+  final BrightService _brightService = BrightService();
   final TextEditingController _chatController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
 
   bool _isLoading = true;
   bool _isRefreshing = false;
@@ -20,6 +23,10 @@ class _BrightScreenState extends State<BrightScreen> {
 
   List<Map<String, dynamic>> _events = [];
   List<Map<String, dynamic>> _checkins = [];
+
+  String? _conversationId;
+  List<BrightMessage> _messages = [];
+  bool _isSending = false;
 
   static const Color _bg = Color(0xFF070709);
   static const Color _card = Color(0xFF121216);
@@ -38,6 +45,7 @@ class _BrightScreenState extends State<BrightScreen> {
   @override
   void dispose() {
     _chatController.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -57,28 +65,40 @@ class _BrightScreenState extends State<BrightScreen> {
       if (mounted) {
         setState(() {
           _isRefreshing = true;
-          if (_events.isEmpty && _checkins.isEmpty) {
+          if (_events.isEmpty && _checkins.isEmpty && _messages.isEmpty) {
             _isLoading = true;
           }
           _error = null;
         });
       }
 
-      await _brightService.monitorMissedTasks(userId: user.id);
+      await _monitoringService.monitorMissedTasks(userId: user.id);
 
       final results = await Future.wait([
-        _brightService.getOpenEvents(userId: user.id, limit: 20),
-        _brightService.getRecentCheckins(userId: user.id, limit: 10),
+        _monitoringService.getOpenEvents(userId: user.id, limit: 20),
+        _monitoringService.getRecentCheckins(userId: user.id, limit: 10),
       ]);
+
+      final conversationId =
+          await _brightService.getOrCreateActiveConversation();
+
+      final messages = await _brightService.loadMessages(
+        conversationId: conversationId,
+        limit: 30,
+      );
 
       if (!mounted) return;
 
       setState(() {
-        _events = results[0];
-        _checkins = results[1];
+        _events = List<Map<String, dynamic>>.from(results[0]);
+        _checkins = List<Map<String, dynamic>>.from(results[1]);
+        _conversationId = conversationId;
+        _messages = messages;
         _isLoading = false;
         _isRefreshing = false;
       });
+
+      _scrollChatToBottom();
     } catch (e, st) {
       debugPrint('BRIGHT SCREEN ERROR: $e');
       debugPrint('$st');
@@ -94,17 +114,17 @@ class _BrightScreenState extends State<BrightScreen> {
   }
 
   Future<void> _dismissEvent(String eventId) async {
-    await _brightService.dismissEvent(eventId: eventId);
+    await _monitoringService.dismissEvent(eventId: eventId);
     await _loadBrightData();
   }
 
   Future<void> _resolveEvent(String eventId) async {
-    await _brightService.resolveEvent(eventId: eventId);
+    await _monitoringService.resolveEvent(eventId: eventId);
     await _loadBrightData();
   }
 
   Future<void> _markSeen(String eventId) async {
-    await _brightService.markEventSeen(eventId: eventId);
+    await _monitoringService.markEventSeen(eventId: eventId);
     await _loadBrightData();
   }
 
@@ -766,6 +786,538 @@ class _BrightScreenState extends State<BrightScreen> {
     );
   }
 
+void _scrollChatToBottom() {
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    if (!_scrollController.hasClients) return;
+
+    _scrollController.animateTo(
+      _scrollController.position.maxScrollExtent,
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOut,
+    );
+  });
+}
+
+Map<String, dynamic> _buildLocalBrightDraft(String rawText) {
+  final text = rawText.trim();
+  final lower = text.toLowerCase();
+
+  if (lower.contains('change') && lower.contains('time') ||
+      lower.contains('move') ||
+      lower.contains('reschedule')) {
+    return {
+      'content':
+          'I can help with a time change, but I need the task name, new time, and a real constraint. Bright only allows one time change per task per month.',
+      'action_json': null,
+    };
+  }
+
+  if (lower.contains('add habit') ||
+      lower.contains('new habit') ||
+      lower.contains('build habit') ||
+      lower.contains('add task')) {
+    return {
+      'content':
+          'I can help build this goal properly. Bright will only create a 3–4 habit structure, and every habit needs verification. Tell me the goal and the kind of habits you want.',
+      'action_json': null,
+    };
+  }
+
+  if (lower.contains('verifier') || lower.contains('verification')) {
+    return {
+      'content':
+          'Verification is the backbone here. I can help set partner, focus, location, or combined verification depending on the task.',
+      'action_json': null,
+    };
+  }
+
+  if (lower.contains('increase') ||
+      lower.contains('harder') ||
+      lower.contains('extend')) {
+    return {
+      'content':
+          'Good. Bright can help increase difficulty when it improves discipline. Tell me which task and what increase you want.',
+      'action_json': null,
+    };
+  }
+
+  return {
+    'content':
+        'I’m here. Keep it specific: schedule changes, habit setup, verifier setup, or progression. I won’t weaken the system for excuses.',
+    'action_json': null,
+  };
+}
+
+Future<void> _submitBrightText(String text) async {
+  final cleanText = text.trim();
+  if (cleanText.isEmpty || _isSending) return;
+
+  setState(() {
+    _isSending = true;
+  });
+
+  try {
+    final conversationId = _conversationId ??
+        await _brightService.getOrCreateActiveConversation();
+
+    final userMessage = await _brightService.saveUserMessage(
+      conversationId: conversationId,
+      content: cleanText,
+    );
+
+    Map<String, dynamic> draft;
+
+    try {
+      draft = await _brightService.generateBrightReply(
+        message: cleanText,
+        recentMessages: _messages,
+      );
+    } catch (e) {
+      debugPrint('BRIGHT AI FALLBACK: $e');
+      draft = _buildLocalBrightDraft(cleanText);
+    }
+
+    final assistantMessage = await _brightService.saveAssistantMessage(
+      conversationId: conversationId,
+      content: draft['reply']?.toString() ??
+          draft['content']?.toString() ??
+          'Bright could not form a response.',
+      actionJson: draft['action'] is Map<String, dynamic>
+          ? Map<String, dynamic>.from(draft['action'] as Map)
+          : draft['action_json'] is Map<String, dynamic>
+              ? Map<String, dynamic>.from(draft['action_json'] as Map)
+              : null,
+      metadata: {
+        'mode': draft.containsKey('reply') ? 'ai' : 'local_rule_draft',
+      },
+    );
+
+    if (!mounted) return;
+
+    setState(() {
+      _conversationId = conversationId;
+      _messages = [
+        ..._messages,
+        userMessage,
+        assistantMessage,
+      ];
+      _isSending = false;
+    });
+
+    _scrollChatToBottom();
+  } catch (e, st) {
+    debugPrint('BRIGHT CHAT ERROR: $e');
+    debugPrint('$st');
+
+    if (!mounted) return;
+
+    setState(() {
+      _isSending = false;
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Bright could not respond: $e')),
+    );
+  }
+}
+
+Widget _quickPromptChip(String text) {
+  return GestureDetector(
+    onTap: _isSending ? null : () => _submitBrightText(text),
+    child: Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: _card2,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: _border),
+      ),
+      child: Text(
+        text,
+        style: const TextStyle(
+          color: _muted,
+          fontSize: 12,
+          fontWeight: FontWeight.w900,
+        ),
+      ),
+    ),
+  );
+}
+
+Widget _buildQuickPrompts() {
+  return Padding(
+    padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+    child: Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        _quickPromptChip('Change a task time'),
+        _quickPromptChip('Add habits to a goal'),
+        _quickPromptChip('Setup verification'),
+        _quickPromptChip('Increase difficulty'),
+      ],
+    ),
+  );
+}
+
+Widget _buildBrightMessage(BrightMessage message) {
+  final isUser = message.isUser;
+  final hasAction = message.hasAction;
+
+  return Align(
+    alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
+    child: Container(
+      margin: EdgeInsets.fromLTRB(
+        isUser ? 58 : 20,
+        0,
+        isUser ? 20 : 58,
+        10,
+      ),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: isUser ? _text : _card,
+        borderRadius: BorderRadius.only(
+          topLeft: const Radius.circular(20),
+          topRight: const Radius.circular(20),
+          bottomLeft: Radius.circular(isUser ? 20 : 6),
+          bottomRight: Radius.circular(isUser ? 6 : 20),
+        ),
+        border: Border.all(
+          color: isUser ? _text : _border,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment:
+            isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+        children: [
+          Text(
+            message.content,
+            style: TextStyle(
+              color: isUser ? Colors.black : _text,
+              fontSize: 13.5,
+              height: 1.38,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          if (hasAction) ...[
+            const SizedBox(height: 12),
+            _buildActionCard(message),
+          ],
+        ],
+      ),
+    ),
+  );
+}
+
+Widget _buildActionCard(BrightMessage message) {
+  final action = message.actionJson ?? {};
+  final type = action['type']?.toString() ?? 'Bright action';
+
+  String title = 'Bright action';
+  String subtitle = 'Confirm this change before Bright applies it.';
+
+  if (type == 'bright_change_habit_time') {
+    title = 'Change future task time';
+    subtitle =
+        '${action['habit_title'] ?? 'Habit'} → ${action['new_start_time'] ?? 'new time'}';
+  } else if (type == 'bright_add_goal_habits') {
+    title = 'Add habits to goal';
+    subtitle = 'Bright will create a verified 3–4 habit structure.';
+  } else if (type == 'bright_change_habit_duration') {
+  title = 'Increase task duration';
+  subtitle =
+      '${action['habit_title'] ?? 'Habit'} → ${action['new_duration_minutes'] ?? 'new'} minutes';
+  } 
+
+  return Container(
+    width: double.infinity,
+    padding: const EdgeInsets.all(13),
+    decoration: BoxDecoration(
+      color: const Color(0xFF0D0D10),
+      borderRadius: BorderRadius.circular(17),
+      border: Border.all(color: const Color(0xFF2C2C34)),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          style: const TextStyle(
+            color: _text,
+            fontSize: 13,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+        const SizedBox(height: 5),
+        Text(
+          subtitle,
+          style: const TextStyle(
+            color: _muted,
+            fontSize: 12,
+            height: 1.35,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(height: 11),
+        Row(
+          children: [
+            Expanded(
+              child: GestureDetector(
+                onTap: () => _handleBrightAction(message),
+                child: Container(
+                  height: 38,
+                  decoration: BoxDecoration(
+                    color: _text,
+                    borderRadius: BorderRadius.circular(13),
+                  ),
+                  child: const Center(
+                    child: Text(
+                      'Confirm',
+                      style: TextStyle(
+                        color: Colors.black,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Container(
+                height: 38,
+                decoration: BoxDecoration(
+                  color: _card2,
+                  borderRadius: BorderRadius.circular(13),
+                  border: Border.all(color: _border),
+                ),
+                child: const Center(
+                  child: Text(
+                    'Cancel',
+                    style: TextStyle(
+                      color: _muted,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
+    ),
+  );
+}
+
+  Widget _buildBrightChatPanel() {
+    final visibleMessages = _messages.length > 8
+        ? _messages.sublist(_messages.length - 8)
+        : _messages;
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(20, 0, 20, 18),
+      padding: const EdgeInsets.fromLTRB(0, 16, 0, 6),
+      decoration: BoxDecoration(
+        color: _card,
+        borderRadius: BorderRadius.circular(26),
+        border: Border.all(color: _border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16),
+            child: Row(
+              children: [
+                Icon(Icons.chat_bubble_outline_rounded, color: _muted, size: 18),
+                SizedBox(width: 8),
+                Text(
+                  'Ask Bright',
+                  style: TextStyle(
+                    color: _text,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: -0.25,
+                  ),
+                ),
+                Spacer(),
+                Text(
+                  '24h memory',
+                  style: TextStyle(
+                    color: _faint,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          if (visibleMessages.isEmpty)
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: Text(
+                'Ask for schedule changes, habit setup, verification help, or progression. Bright will stay strict.',
+                style: TextStyle(
+                  color: _muted,
+                  fontSize: 13,
+                  height: 1.35,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            )
+          else
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 320),
+              child: ListView(
+                controller: _scrollController,
+                shrinkWrap: true,
+                padding: EdgeInsets.zero,
+                children: visibleMessages.map(_buildBrightMessage).toList(),
+              ),
+            ),
+          if (_isSending)
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: Text(
+                'Bright is thinking...',
+                style: TextStyle(
+                  color: _faint,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _handleBrightAction(BrightMessage message) async {
+    final action = message.actionJson;
+    if (action == null || action.isEmpty) return;
+
+    final type = action['type']?.toString();
+
+    try {
+      if (type == 'bright_change_habit_time') {
+        final result = await _brightService.applyHabitTimeChange(
+          habitId: action['habit_id'].toString(),
+          newStartTime: action['new_start_time'].toString(),
+          reasonCategory: action['reason_category'].toString(),
+          reason: action['reason'].toString(),
+        );
+
+        final conversationId = _conversationId ??
+            await _brightService.getOrCreateActiveConversation();
+
+        final confirmation = await _brightService.saveAssistantMessage(
+          conversationId: conversationId,
+          content: result['message']?.toString() ??
+              'Bright applied the schedule change.',
+          metadata: {
+            'action_applied': type,
+          },
+        );
+
+        if (!mounted) return;
+
+        setState(() {
+          _messages = [..._messages, confirmation];
+        });
+
+        _scrollChatToBottom();
+        await _loadBrightData();
+        return;
+      }
+
+      if (type == 'bright_add_goal_habits') {
+        final rawHabits = action['habits'];
+        final habits = rawHabits is List
+            ? rawHabits
+                .map((item) => Map<String, dynamic>.from(item as Map))
+                .toList()
+            : <Map<String, dynamic>>[];
+
+        final result = await _brightService.addGoalHabits(
+          goalId: action['goal_id'].toString(),
+          habits: habits,
+          defaultVerifierUserId:
+              action['default_verifier_user_id']?.toString(),
+          reason: action['reason']?.toString() ??
+              'Bright created a disciplined goal structure.',
+        );
+
+        final conversationId = _conversationId ??
+            await _brightService.getOrCreateActiveConversation();
+
+        final confirmation = await _brightService.saveAssistantMessage(
+          conversationId: conversationId,
+          content: result['message']?.toString() ??
+              'Bright added the habits to your goal.',
+          metadata: {
+            'action_applied': type,
+          },
+        );
+
+        if (!mounted) return;
+
+        setState(() {
+          _messages = [..._messages, confirmation];
+        });
+
+        _scrollChatToBottom();
+        await _loadBrightData();
+        return;
+      }
+
+      if (type == 'bright_change_habit_duration') {
+        final result = await _brightService.applyHabitDurationChange(
+          habitId: action['habit_id'].toString(),
+          newDurationMinutes: int.parse(action['new_duration_minutes'].toString()),
+          reasonCategory: action['reason_category'].toString(),
+          reason: action['reason'].toString(),
+        );
+
+        final conversationId = _conversationId ??
+            await _brightService.getOrCreateActiveConversation();
+
+        final confirmation = await _brightService.saveAssistantMessage(
+          conversationId: conversationId,
+          content: result['message']?.toString() ??
+              'Bright applied the duration change.',
+          metadata: {
+            'action_applied': type,
+          },
+        );
+
+        if (!mounted) return;
+
+        setState(() {
+          _messages = [..._messages, confirmation];
+        });
+
+        _scrollChatToBottom();
+        await _loadBrightData();
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Unsupported Bright action: $type')),
+      );
+    } catch (e, st) {
+      debugPrint('BRIGHT ACTION ERROR: $e');
+      debugPrint('$st');
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Bright action failed: $e')),
+      );
+    }
+  }
+
   Widget _buildChatInput() {
     return Container(
       padding: const EdgeInsets.fromLTRB(20, 10, 20, 16),
@@ -834,11 +1386,19 @@ class _BrightScreenState extends State<BrightScreen> {
                   ),
                 ],
               ),
-              child: const Icon(
-                Icons.arrow_upward_rounded,
-                color: Colors.black,
-                size: 22,
-              ),
+              child: _isSending
+                  ? const Padding(
+                      padding: EdgeInsets.all(14),
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.black,
+                      ),
+                    )
+                  : const Icon(
+                      Icons.arrow_upward_rounded,
+                      color: Colors.black,
+                      size: 22,
+                    ),
             ),
           ),
         ],
@@ -846,17 +1406,12 @@ class _BrightScreenState extends State<BrightScreen> {
     );
   }
 
-  void _handleChatSubmit() {
+  Future<void> _handleChatSubmit() async {
     final text = _chatController.text.trim();
-    if (text.isEmpty) return;
+    if (text.isEmpty || _isSending) return;
 
     _chatController.clear();
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('BRIGHT chat is next. Monitoring is active now.'),
-      ),
-    );
+    await _submitBrightText(text);
   }
 
   Widget _buildLoading() {
@@ -932,6 +1487,8 @@ class _BrightScreenState extends State<BrightScreen> {
         children: [
           _buildHeader(),
           _buildCommandCard(),
+          _buildQuickPrompts(),
+          _buildBrightChatPanel(),
           _sectionHeader(
             title: 'Needs attention',
             count: _events.length,

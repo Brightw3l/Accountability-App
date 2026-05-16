@@ -3,6 +3,7 @@
 import 'package:achievr_app/Services/verification_service.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:achievr_app/Utils/time_window_formatter.dart';
 
 class VerificationRequestDetailScreen extends StatefulWidget {
   final String requestId;
@@ -356,8 +357,11 @@ class _VerificationRequestDetailScreenState
     final requesterName = _displayName(_requester);
 
     final logDate = (log['log_date'] ?? '').toString();
-    final start = (log['scheduled_start'] ?? '').toString();
-    final end = (log['scheduled_end'] ?? '').toString();
+
+    final windowText = TimeWindowFormatter.formatWindow(
+      start: log['scheduled_start'],
+      end: log['scheduled_end'],
+    );
 
     return _card(
       child: Column(
@@ -400,8 +404,8 @@ class _VerificationRequestDetailScreenState
           ],
           _infoRow('Requester', requesterName),
           _infoRow('Date', logDate),
-          if (start.isNotEmpty && end.isNotEmpty)
-            _infoRow('Window', '$start → $end'),
+          if (windowText != 'No time set')
+            _infoRow('Window', windowText),
           _infoRow(
             'Submitted note',
             (request['note'] ?? '').toString(),

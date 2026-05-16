@@ -4,6 +4,7 @@ import 'package:achievr_app/Services/app_clock.dart';
 import 'package:achievr_app/Widgets/hold_to_refresh_wrapper.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:achievr_app/Utils/time_window_formatter.dart';
 
 class UpcomingScreen extends StatefulWidget {
   const UpcomingScreen({super.key});
@@ -235,13 +236,13 @@ class _UpcomingScreenState extends State<UpcomingScreen> {
     return (hour * 60) + minute;
   }
 
-  int _durationMinutes(Map<String, dynamic> item) {
-    final start = _timeToMinutes(item['start_time']?.toString());
-    final end = _timeToMinutes(item['end_time']?.toString());
-
-    if (end <= start) return 0;
-    return end - start;
-  }
+    int _durationMinutes(Map<String, dynamic> item) {
+      return TimeWindowFormatter.durationMinutes(
+            start: item['start_time'],
+            end: item['end_time'],
+          ) ??
+          0;
+    }
 
   String _formatTimeString(String hhmmss) {
     final parts = hhmmss.split(':');
@@ -677,7 +678,10 @@ class _UpcomingScreenState extends State<UpcomingScreen> {
                         ),
                         const SizedBox(height: 6),
                         Text(
-                          '${_dayNames[startAt.weekday] ?? 'Unknown Day'} • ${_formatTimeString(item['start_time'].toString())} – ${_formatTimeString(item['end_time'].toString())}',
+                          '${_dayNames[startAt.weekday] ?? 'Unknown Day'} • ${TimeWindowFormatter.formatWindow(
+                            start: item['start_time'],
+                            end: item['end_time'],
+                          )}',
                           style: const TextStyle(
                             color: Color(0xFFB3B3BB),
                             fontSize: 12,
@@ -812,7 +816,10 @@ class _UpcomingScreenState extends State<UpcomingScreen> {
                           ),
                           const SizedBox(height: 6),
                           Text(
-                            '${_formatTimeString(item['start_time'].toString())} – ${_formatTimeString(item['end_time'].toString())}',
+                            TimeWindowFormatter.formatWindow(
+                              start: item['start_time'],
+                              end: item['end_time'],
+                            ),
                             style: const TextStyle(
                               color: Color(0xFFB3B3BB),
                               fontSize: 12,

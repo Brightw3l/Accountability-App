@@ -356,7 +356,7 @@ String _formatLogDate(Map<String, dynamic> log) {
 
     return DateTime(year, month, day, hour, minute);
   }
-
+  
   DateTime? _logEndDateTime(Map<String, dynamic> log) {
     final logDateRaw = log['log_date']?.toString();
     final endRaw = log['scheduled_end']?.toString();

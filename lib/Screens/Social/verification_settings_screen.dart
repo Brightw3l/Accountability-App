@@ -7,6 +7,7 @@ import 'package:achievr_app/Services/habit_location_service.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:achievr_app/Screens/Social/verification_request_detail_screen.dart';
+import 'package:achievr_app/Utils/time_window_formatter.dart';
 
 class VerificationSettingsScreen extends StatefulWidget {
   const VerificationSettingsScreen({super.key});
@@ -1049,7 +1050,10 @@ class _VerificationSettingsScreenState
           if (scheduledStart != null && scheduledEnd != null) ...[
             const SizedBox(height: 4),
             Text(
-              'Window: $scheduledStart → $scheduledEnd',
+              'Window: ${TimeWindowFormatter.formatWindow(
+                start: logMeta?['scheduled_start'],
+                end: logMeta?['scheduled_end'],
+              )}',
               style: const TextStyle(
                 color: Color(0xFFB3B3BB),
                 fontSize: 12,
@@ -1134,7 +1138,11 @@ class _VerificationSettingsScreenState
                 Text(
                   [
                     if (logDate != null) logDate,
-                    if (start != null && end != null) '$start → $end',
+                    if (start != null && end != null)
+                      TimeWindowFormatter.formatWindow(
+                        start: start,
+                        end: end,
+                      ),
                   ].join(' • '),
                   style: const TextStyle(
                     color: Color(0xFFB3B3BB),

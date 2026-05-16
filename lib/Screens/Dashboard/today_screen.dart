@@ -20,6 +20,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:achievr_app/Services/bright_monitoring_service.dart';
+import 'package:achievr_app/Utils/time_window_formatter.dart';
 
 class TodayScreen extends ConsumerStatefulWidget {
   const TodayScreen({super.key});
@@ -1215,7 +1216,7 @@ Future<void> _submitPartnerVerification(Map<String, dynamic> log) async {
       return _CompletionAvailability(
         canCompleteNow: false,
         message:
-            'This task becomes available at ${_formatTimeString(log['scheduled_start'].toString())}.',
+        'This task becomes available at ${TimeWindowFormatter.formatTimeValue(log['scheduled_start'])}.',
       );
     }
 
@@ -2048,8 +2049,10 @@ Future<void> _submitPartnerVerification(Map<String, dynamic> log) async {
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        '${log['scheduled_start'] != null ? _formatTimeString(log['scheduled_start'].toString()) : 'No time'}'
-                        '${log['scheduled_end'] != null ? ' – ${_formatTimeString(log['scheduled_end'].toString())}' : ''}',
+                        TimeWindowFormatter.formatWindow(
+                          start: log['scheduled_start'],
+                          end: log['scheduled_end'],
+                        ),
                         style: const TextStyle(
                           color: Color(0xFFB3B3BB),
                           fontSize: 12,
