@@ -19,6 +19,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:achievr_app/Services/verification_service.dart';
 import 'package:achievr_app/Services/tone_service.dart';
+import 'package:achievr_app/Services/device_runtime_service.dart';
 
 class FocusModeScreen extends ConsumerStatefulWidget {
   final Map<String, dynamic> log;
@@ -39,6 +40,7 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
   final PointsService _pointsService = PointsService();
   final BadgeService _badgeService = BadgeService();
   final VerificationService _verificationService = VerificationService();
+  final DeviceRuntimeService _deviceRuntimeService = DeviceRuntimeService();
 
   bool _isStarting = false;
   bool _isCompleting = false;
@@ -464,7 +466,8 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
       }
 
       if (!runtimeState.usageAccessReady) {
-        throw Exception('Usage access is required for focus mode.');
+        await _showUsageAccessRequiredDialog();
+        return;
       }
 
       _lastHandledPenaltyStatus = null;
@@ -489,6 +492,69 @@ class _FocusModeScreenState extends ConsumerState<FocusModeScreen> {
         });
       }
     }
+  }
+
+  Future<void> _showUsageAccessRequiredDialog() async {
+    if (!mounted) return;
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      builder: (dialogContext) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF17171A),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(22),
+          ),
+          title: const Text(
+            'Enable Usage Access',
+            style: TextStyle(
+              color: Color(0xFFF5F5F5),
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          content: const Text(
+            'Achievr needs Usage Access to detect app violations during Focus Mode. '
+            'Enable it before starting this task.',
+            style: TextStyle(
+              color: Color(0xFFB3B3BB),
+              height: 1.35,
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text(
+                'Not now',
+                style: TextStyle(color: Color(0xFF9A9AA3)),
+              ),
+            ),
+            FilledButton(
+              onPressed: () async {
+                Navigator.pop(dialogContext);
+
+                try {
+                  await _deviceRuntimeService.openUsageAccessSettings();
+                } catch (e) {
+                  if (!mounted) return;
+
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Could not open usage settings: $e'),
+                    ),
+                  );
+                }
+              },
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFFF5F5F5),
+                foregroundColor: Colors.black,
+              ),
+              child: const Text('Open settings'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   Future<void> _completeFocus() async {

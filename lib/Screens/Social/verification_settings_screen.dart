@@ -537,6 +537,20 @@ class _VerificationSettingsScreenState
     }
   }
 
+  Future<void> _setHabitVerifier({
+    required String habitId,
+    required String? verifierUserId,
+  }) async {
+    await _supabase.rpc(
+      'set_habit_verifier',
+      params: {
+        'p_habit_id': habitId,
+        'p_new_verifier_user_id': verifierUserId,
+        'p_move_pending_requests': verifierUserId != null,
+      },
+    );
+  }
+
   Future<void> _pickVerifierForHabit(Map<String, dynamic> habit) async {
     if (_friends.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -643,20 +657,13 @@ class _VerificationSettingsScreenState
         _isSaving = true;
       });
 
-      await _supabase
-          .from('habit_verifiers')
-          .update({'active': false})
-          .eq('habit_id', habitId)
-          .eq('active', true);
+      final selectedVerifierId =
+          selected.trim().isEmpty ? null : selected.trim();
 
-      if (selected.isNotEmpty) {
-        await _supabase.from('habit_verifiers').insert({
-          'habit_id': habitId,
-          'verifier_user_id': selected,
-          'assigned_by_user_id': currentUserId,
-          'active': true,
-        });
-      }
+      await _setHabitVerifier(
+        habitId: habitId,
+        verifierUserId: selectedVerifierId,
+      );
 
       await _loadHubData();
 
@@ -665,11 +672,13 @@ class _VerificationSettingsScreenState
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            selected.isEmpty ? 'Verifier removed.' : 'Verifier assigned.',
+            selectedVerifierId == null
+                ? 'Verifier removed.'
+                : 'Verifier updated.',
           ),
         ),
       );
-    } catch (e) {
+    } catch (e) {   
       if (!mounted) return;
 
       ScaffoldMessenger.of(context).showSnackBar(
